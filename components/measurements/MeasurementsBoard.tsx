@@ -24,6 +24,15 @@ import type {
 type DrawMode = "idle" | "annotation" | "calibration_line" | "calibration_box";
 
 type Point = { x: number; y: number };
+type BoxHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+type LineHandle = "start" | "end";
+
+type EditTarget =
+  | { kind: "annotation_box"; annotationId: string; handle: BoxHandle }
+  | { kind: "calibration_draft_box"; handle: BoxHandle }
+  | { kind: "calibration_saved_box"; handle: BoxHandle }
+  | { kind: "calibration_draft_line"; handle: LineHandle }
+  | { kind: "calibration_saved_line"; handle: LineHandle };
 
 const measurementItemTypeOptions: Array<{ value: MeasurementItemType; label: string }> = [
   { value: "glass", label: "Glass Element" },
@@ -100,6 +109,22 @@ const annotationStrokeByType: Record<MeasurementItemType, string> = {
   other: "#d0d0d0"
 };
 
+const boxHandleDefs: Array<{
+  handle: BoxHandle;
+  tx: number;
+  ty: number;
+  cursor: string;
+}> = [
+  { handle: "nw", tx: 0, ty: 0, cursor: "nwse-resize" },
+  { handle: "n", tx: 0.5, ty: 0, cursor: "ns-resize" },
+  { handle: "ne", tx: 1, ty: 0, cursor: "nesw-resize" },
+  { handle: "e", tx: 1, ty: 0.5, cursor: "ew-resize" },
+  { handle: "se", tx: 1, ty: 1, cursor: "nwse-resize" },
+  { handle: "s", tx: 0.5, ty: 1, cursor: "ns-resize" },
+  { handle: "sw", tx: 0, ty: 1, cursor: "nesw-resize" },
+  { handle: "w", tx: 0, ty: 0.5, cursor: "ew-resize" }
+];
+
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
@@ -116,6 +141,92 @@ function normalizeBox(start: Point, end: Point): { x: number; y: number; width: 
     width: clamp01(width),
     height: clamp01(height)
   };
+}
+
+function boxToEdges(box: { x: number; y: number; width: number; height: number }): {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+} {
+  return {
+    x1: clamp01(box.x),
+    y1: clamp01(box.y),
+    x2: clamp01(box.x + box.width),
+    y2: clamp01(box.y + box.height)
+  };
+}
+
+function edgesToBox(
+  edges: { x1: number; y1: number; x2: number; y2: number },
+  minSize = 0.005
+): { x: number; y: number; width: number; height: number } {
+  let x1 = clamp01(Math.min(edges.x1, edges.x2));
+  let y1 = clamp01(Math.min(edges.y1, edges.y2));
+  let x2 = clamp01(Math.max(edges.x1, edges.x2));
+  let y2 = clamp01(Math.max(edges.y1, edges.y2));
+
+  if (x2 - x1 < minSize) {
+    const center = (x1 + x2) / 2;
+    x1 = clamp01(center - minSize / 2);
+    x2 = clamp01(center + minSize / 2);
+  }
+
+  if (y2 - y1 < minSize) {
+    const center = (y1 + y2) / 2;
+    y1 = clamp01(center - minSize / 2);
+    y2 = clamp01(center + minSize / 2);
+  }
+
+  return {
+    x: x1,
+    y: y1,
+    width: Math.max(minSize, x2 - x1),
+    height: Math.max(minSize, y2 - y1)
+  };
+}
+
+function resizeBoxWithHandle(
+  box: { x: number; y: number; width: number; height: number },
+  handle: BoxHandle,
+  point: Point
+): { x: number; y: number; width: number; height: number } {
+  const edges = boxToEdges(box);
+
+  switch (handle) {
+    case "nw":
+      edges.x1 = point.x;
+      edges.y1 = point.y;
+      break;
+    case "n":
+      edges.y1 = point.y;
+      break;
+    case "ne":
+      edges.x2 = point.x;
+      edges.y1 = point.y;
+      break;
+    case "e":
+      edges.x2 = point.x;
+      break;
+    case "se":
+      edges.x2 = point.x;
+      edges.y2 = point.y;
+      break;
+    case "s":
+      edges.y2 = point.y;
+      break;
+    case "sw":
+      edges.x1 = point.x;
+      edges.y2 = point.y;
+      break;
+    case "w":
+      edges.x1 = point.x;
+      break;
+    default:
+      break;
+  }
+
+  return edgesToBox(edges);
 }
 
 function parseOptionalNumber(raw: string): number | undefined {
@@ -378,6 +489,7 @@ export function MeasurementsBoard({
   const [drawMode, setDrawMode] = useState<DrawMode>("idle");
   const [drawingStart, setDrawingStart] = useState<Point | null>(null);
   const [drawingCurrent, setDrawingCurrent] = useState<Point | null>(null);
+  const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
 
   const [calibrationReferenceLabel, setCalibrationReferenceLabel] = useState("Housing length");
   const [calibrationKnownLengthMm, setCalibrationKnownLengthMm] = useState("");
@@ -387,6 +499,8 @@ export function MeasurementsBoard({
   const [syncError, setSyncError] = useState("");
 
   const selectedAnnotation = annotations.find((annotation) => annotation.id === selectedAnnotationId) ?? annotations[0];
+  const savedCalibrationGeometry = measurements.calibration?.geometry;
+  const canEditGeometry = drawMode === "idle" && !drawingStart;
 
   useEffect(() => {
     if (!selectedAnnotationId && annotations[0]) {
@@ -454,6 +568,58 @@ export function MeasurementsBoard({
     }));
   };
 
+  const updateAnnotationGeometry = (
+    annotationId: string,
+    box: { x: number; y: number; width: number; height: number }
+  ) => {
+    patchMeasurements((current) => ({
+      ...current,
+      annotations: current.annotations.map((annotation) =>
+        annotation.id === annotationId
+          ? {
+              ...annotation,
+              x: box.x,
+              y: box.y,
+              width: box.width,
+              height: box.height,
+              updatedAt: new Date().toISOString()
+            }
+          : annotation
+      )
+    }));
+  };
+
+  const updateCalibrationGeometry = (
+    target: "draft" | "saved",
+    geometry: CalibrationReferenceGeometry
+  ) => {
+    if (target === "draft") {
+      setCalibrationDraftGeometry(geometry);
+      return;
+    }
+
+    if (!measurements.calibration) return;
+
+    const board = boardRef.current;
+    const nextPixelsPerMm =
+      board && measurements.calibration.knownLengthMm > 0
+        ? lineDistancePixels(geometry, board.clientWidth, board.clientHeight) /
+          measurements.calibration.knownLengthMm
+        : measurements.calibration.pixelsPerMm;
+
+    patchMeasurements((current) => {
+      if (!current.calibration) return current;
+      return {
+        ...current,
+        calibration: {
+          ...current.calibration,
+          geometry,
+          pixelsPerMm: nextPixelsPerMm
+        }
+      };
+    });
+  };
+
   const toNormalizedPoint = (clientX: number, clientY: number): Point | null => {
     const board = boardRef.current;
     if (!board) return null;
@@ -467,6 +633,7 @@ export function MeasurementsBoard({
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!measurements.photoDataUrl) return;
+    if (editTarget) return;
     if (drawMode === "idle") return;
     const point = toNormalizedPoint(event.clientX, event.clientY);
     if (!point) return;
@@ -478,9 +645,55 @@ export function MeasurementsBoard({
   };
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!drawingStart) return;
     const point = toNormalizedPoint(event.clientX, event.clientY);
     if (!point) return;
+
+    if (editTarget) {
+      if (editTarget.kind === "annotation_box") {
+        const annotation = annotations.find((entry) => entry.id === editTarget.annotationId);
+        if (!annotation) return;
+        const resized = resizeBoxWithHandle(
+          { x: annotation.x, y: annotation.y, width: annotation.width, height: annotation.height },
+          editTarget.handle,
+          point
+        );
+        updateAnnotationGeometry(editTarget.annotationId, resized);
+        return;
+      }
+
+      if (editTarget.kind === "calibration_draft_box" || editTarget.kind === "calibration_saved_box") {
+        const source =
+          editTarget.kind === "calibration_draft_box"
+            ? calibrationDraftGeometry
+            : measurements.calibration?.geometry;
+        if (!source || source.referenceType !== "box") return;
+        const resized = resizeBoxWithHandle(source, editTarget.handle, point);
+        updateCalibrationGeometry(
+          editTarget.kind === "calibration_draft_box" ? "draft" : "saved",
+          { referenceType: "box", ...resized }
+        );
+        return;
+      }
+
+      if (editTarget.kind === "calibration_draft_line" || editTarget.kind === "calibration_saved_line") {
+        const source =
+          editTarget.kind === "calibration_draft_line"
+            ? calibrationDraftGeometry
+            : measurements.calibration?.geometry;
+        if (!source || source.referenceType !== "line") return;
+        const nextLine: CalibrationReferenceGeometry =
+          editTarget.handle === "start"
+            ? { ...source, x1: point.x, y1: point.y }
+            : { ...source, x2: point.x, y2: point.y };
+        updateCalibrationGeometry(
+          editTarget.kind === "calibration_draft_line" ? "draft" : "saved",
+          nextLine
+        );
+        return;
+      }
+    }
+
+    if (!drawingStart) return;
     setDrawingCurrent(point);
   };
 
@@ -490,6 +703,10 @@ export function MeasurementsBoard({
   };
 
   const handlePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (editTarget) {
+      setEditTarget(null);
+      return;
+    }
     if (!drawingStart) return;
     const endPoint = toNormalizedPoint(event.clientX, event.clientY);
     const resolvedEnd = endPoint ?? drawingCurrent;
@@ -552,6 +769,17 @@ export function MeasurementsBoard({
     }
 
     resetDrawing();
+  };
+
+  const handleEditPointerDown = (
+    event: ReactPointerEvent<SVGElement>,
+    target: EditTarget
+  ) => {
+    if (!measurements.photoDataUrl) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDrawMode("idle");
+    setEditTarget(target);
   };
 
   const handleUploadPhoto = async (file?: File) => {
@@ -782,6 +1010,7 @@ export function MeasurementsBoard({
               onPointerUp={handlePointerUp}
               onPointerLeave={() => {
                 if (drawingStart) resetDrawing();
+                if (editTarget) setEditTarget(null);
               }}
             >
               {!measurements.photoDataUrl && (
@@ -800,7 +1029,7 @@ export function MeasurementsBoard({
                     draggable={false}
                   />
 
-                  <svg className="pointer-events-none absolute inset-0 h-full w-full">
+                  <svg className="absolute inset-0 h-full w-full">
                     {measurements.calibration && (
                       <g>
                         {measurements.calibration.geometry.referenceType === "line" ? (
@@ -811,6 +1040,7 @@ export function MeasurementsBoard({
                             y2={`${measurements.calibration.geometry.y2 * 100}%`}
                             stroke="#ffcc66"
                             strokeWidth={2.2}
+                            className="pointer-events-none"
                           />
                         ) : (
                           <rect
@@ -821,6 +1051,7 @@ export function MeasurementsBoard({
                             fill="rgba(255, 204, 102, 0.12)"
                             stroke="#ffcc66"
                             strokeWidth={2}
+                            className="pointer-events-none"
                           />
                         )}
                         <text
@@ -832,11 +1063,66 @@ export function MeasurementsBoard({
                             : measurements.calibration.geometry.y) * 100 - 1}%`}
                           fill="#ffcc66"
                           fontSize="11"
+                          className="pointer-events-none"
                         >
                           {`${measurements.calibration.referenceLabel}: ${formatMm(
                             measurements.calibration.knownLengthMm
                           )}mm`}
                         </text>
+
+                        {canEditGeometry &&
+                          savedCalibrationGeometry?.referenceType === "line" &&
+                          ([
+                            {
+                              key: "start" as const,
+                              x: savedCalibrationGeometry.x1,
+                              y: savedCalibrationGeometry.y1
+                            },
+                            {
+                              key: "end" as const,
+                              x: savedCalibrationGeometry.x2,
+                              y: savedCalibrationGeometry.y2
+                            }
+                          ]).map((point) => (
+                            <circle
+                              key={`saved-cal-line-${point.key}`}
+                              cx={`${point.x * 100}%`}
+                              cy={`${point.y * 100}%`}
+                              r={6}
+                              fill="#ffcc66"
+                              stroke="#1a1a1a"
+                              strokeWidth={1.1}
+                              className="pointer-events-auto cursor-move"
+                              onPointerDown={(event) =>
+                                handleEditPointerDown(event, {
+                                  kind: "calibration_saved_line",
+                                  handle: point.key
+                                })
+                              }
+                            />
+                          ))}
+
+                        {canEditGeometry &&
+                          savedCalibrationGeometry?.referenceType === "box" &&
+                          boxHandleDefs.map((handle) => (
+                            <circle
+                              key={`saved-cal-box-${handle.handle}`}
+                              cx={`${(savedCalibrationGeometry.x + savedCalibrationGeometry.width * handle.tx) * 100}%`}
+                              cy={`${(savedCalibrationGeometry.y + savedCalibrationGeometry.height * handle.ty) * 100}%`}
+                              r={5}
+                              fill="#ffcc66"
+                              stroke="#1a1a1a"
+                              strokeWidth={1}
+                              style={{ cursor: handle.cursor }}
+                              className="pointer-events-auto"
+                              onPointerDown={(event) =>
+                                handleEditPointerDown(event, {
+                                  kind: "calibration_saved_box",
+                                  handle: handle.handle
+                                })
+                              }
+                            />
+                          ))}
                       </g>
                     )}
 
@@ -860,11 +1146,34 @@ export function MeasurementsBoard({
                               if (drawMode === "idle") setSelectedAnnotationId(annotation.id);
                             }}
                           />
+                          {selected &&
+                            canEditGeometry &&
+                            boxHandleDefs.map((handle) => (
+                              <circle
+                                key={`${annotation.id}-${handle.handle}`}
+                                cx={`${(annotation.x + annotation.width * handle.tx) * 100}%`}
+                                cy={`${(annotation.y + annotation.height * handle.ty) * 100}%`}
+                                r={5}
+                                fill="#37a3ff"
+                                stroke="#1a1a1a"
+                                strokeWidth={1}
+                                style={{ cursor: handle.cursor }}
+                                className="pointer-events-auto"
+                                onPointerDown={(event) =>
+                                  handleEditPointerDown(event, {
+                                    kind: "annotation_box",
+                                    annotationId: annotation.id,
+                                    handle: handle.handle
+                                  })
+                                }
+                              />
+                            ))}
                           <text
                             x={`${annotation.x * 100 + 0.5}%`}
                             y={`${annotation.y * 100 + 2.4}%`}
                             fill="#f5f5f5"
                             fontSize="10.5"
+                            className="pointer-events-none"
                           >
                             {annotationDisplayLabel(annotation)}
                           </text>
@@ -916,24 +1225,78 @@ export function MeasurementsBoard({
                     {calibrationDraftGeometry && (
                       <g>
                         {calibrationDraftGeometry.referenceType === "line" ? (
-                          <line
-                            x1={`${calibrationDraftGeometry.x1 * 100}%`}
-                            y1={`${calibrationDraftGeometry.y1 * 100}%`}
-                            x2={`${calibrationDraftGeometry.x2 * 100}%`}
-                            y2={`${calibrationDraftGeometry.y2 * 100}%`}
-                            stroke="#ffcc66"
-                            strokeWidth={2}
-                          />
+                          <>
+                            <line
+                              x1={`${calibrationDraftGeometry.x1 * 100}%`}
+                              y1={`${calibrationDraftGeometry.y1 * 100}%`}
+                              x2={`${calibrationDraftGeometry.x2 * 100}%`}
+                              y2={`${calibrationDraftGeometry.y2 * 100}%`}
+                              stroke="#ffcc66"
+                              strokeWidth={2}
+                            />
+                            {canEditGeometry &&
+                              ([
+                                {
+                                  key: "start" as const,
+                                  x: calibrationDraftGeometry.x1,
+                                  y: calibrationDraftGeometry.y1
+                                },
+                                {
+                                  key: "end" as const,
+                                  x: calibrationDraftGeometry.x2,
+                                  y: calibrationDraftGeometry.y2
+                                }
+                              ]).map((point) => (
+                                <circle
+                                  key={`draft-cal-line-${point.key}`}
+                                  cx={`${point.x * 100}%`}
+                                  cy={`${point.y * 100}%`}
+                                  r={6}
+                                  fill="#ffcc66"
+                                  stroke="#1a1a1a"
+                                  strokeWidth={1.1}
+                                  className="pointer-events-auto cursor-move"
+                                  onPointerDown={(event) =>
+                                    handleEditPointerDown(event, {
+                                      kind: "calibration_draft_line",
+                                      handle: point.key
+                                    })
+                                  }
+                                />
+                              ))}
+                          </>
                         ) : (
-                          <rect
-                            x={`${calibrationDraftGeometry.x * 100}%`}
-                            y={`${calibrationDraftGeometry.y * 100}%`}
-                            width={`${calibrationDraftGeometry.width * 100}%`}
-                            height={`${calibrationDraftGeometry.height * 100}%`}
-                            fill="rgba(255, 204, 102, 0.1)"
-                            stroke="#ffcc66"
-                            strokeWidth={2}
-                          />
+                          <>
+                            <rect
+                              x={`${calibrationDraftGeometry.x * 100}%`}
+                              y={`${calibrationDraftGeometry.y * 100}%`}
+                              width={`${calibrationDraftGeometry.width * 100}%`}
+                              height={`${calibrationDraftGeometry.height * 100}%`}
+                              fill="rgba(255, 204, 102, 0.1)"
+                              stroke="#ffcc66"
+                              strokeWidth={2}
+                            />
+                            {canEditGeometry &&
+                              boxHandleDefs.map((handle) => (
+                                <circle
+                                  key={`draft-cal-box-${handle.handle}`}
+                                  cx={`${(calibrationDraftGeometry.x + calibrationDraftGeometry.width * handle.tx) * 100}%`}
+                                  cy={`${(calibrationDraftGeometry.y + calibrationDraftGeometry.height * handle.ty) * 100}%`}
+                                  r={5}
+                                  fill="#ffcc66"
+                                  stroke="#1a1a1a"
+                                  strokeWidth={1}
+                                  style={{ cursor: handle.cursor }}
+                                  className="pointer-events-auto"
+                                  onPointerDown={(event) =>
+                                    handleEditPointerDown(event, {
+                                      kind: "calibration_draft_box",
+                                      handle: handle.handle
+                                    })
+                                  }
+                                />
+                              ))}
+                          </>
                         )}
                       </g>
                     )}
@@ -941,6 +1304,10 @@ export function MeasurementsBoard({
                 </>
               )}
             </div>
+            <p className="text-xs text-labMuted">
+              Tip: select an annotation and drag the blue handles to resize. Drag yellow handles on calibration
+              line/box to fine-tune scale references.
+            </p>
 
             <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3">
               <div className="flex items-center justify-between gap-3">
