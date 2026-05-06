@@ -5,10 +5,16 @@ import { Button } from "@/components/common/Button";
 
 export function ScadCodeViewer({
   code,
-  onDownload
+  onDownload,
+  codeTitle = "OpenSCAD Code",
+  copyLabel = "Copy OpenSCAD",
+  downloadLabel = "Download .scad"
 }: {
   code: string;
   onDownload: () => void;
+  codeTitle?: string;
+  copyLabel?: string;
+  downloadLabel?: string;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -25,12 +31,12 @@ export function ScadCodeViewer({
   return (
     <div className="panel p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">OpenSCAD Code</h3>
+        <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">{codeTitle}</h3>
         <div className="flex items-center gap-2">
           <Button variant="primary" onClick={onCopy}>
-            {copied ? "Copied" : "Copy OpenSCAD"}
+            {copied ? "Copied" : copyLabel}
           </Button>
-          <Button onClick={onDownload}>Download .scad</Button>
+          <Button onClick={onDownload}>{downloadLabel}</Button>
         </div>
       </div>
       <textarea

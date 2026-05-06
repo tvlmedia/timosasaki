@@ -31,6 +31,8 @@ export type SpacerRingParams = {
   outerDiameterMm: number;
   thicknessMm: number;
   hasAntiReflectionGrooves: boolean;
+  chamferEnabled?: boolean;
+  chamferMm?: number;
   facets: number;
 };
 

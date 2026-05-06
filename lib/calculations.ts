@@ -1,3 +1,4 @@
+import { getItemOpticalTypeLabel } from "@/lib/stackMeta";
 import type { CadDefaults, StackItem } from "@/types";
 
 function toPositive(value: number | undefined): number {
@@ -11,14 +12,41 @@ function sorted(items: StackItem[]): StackItem[] {
   return [...items].sort((a, b) => a.positionIndex - b.positionIndex);
 }
 
-function getNeighboringGlassClearAperture(item?: StackItem): number {
+function getGlassClearApertureForWarnings(item?: StackItem): number {
   if (!item || item.type !== "glass") return 0;
+
   const explicitClearAperture = toPositive(item.clearApertureMm);
   if (explicitClearAperture > 0) return explicitClearAperture;
 
-  // Warnings-only fallback when clear aperture is unknown:
-  // assume usable optical diameter is glass diameter minus 2.0mm.
+  // Warnings-only fallback when clear aperture is unknown.
   return toPositive(item.diameterMm - 2.0);
+}
+
+function getApertureCandidate(item?: StackItem): number {
+  if (!item) return 0;
+  if (item.type === "glass") return getGlassClearApertureForWarnings(item);
+  if (item.type === "iris") return toPositive(item.apertureDiameterMm);
+  return 0;
+}
+
+function getNearestApertureOnSide(items: StackItem[], fromIndex: number, direction: -1 | 1): number {
+  let index = fromIndex + direction;
+  while (index >= 0 && index < items.length) {
+    const candidate = getApertureCandidate(items[index]);
+    if (candidate > 0) return candidate;
+    index += direction;
+  }
+  return 0;
+}
+
+function getNearbyAperture(items: StackItem[], index: number): number {
+  const left = getNearestApertureOnSide(items, index, -1);
+  const right = getNearestApertureOnSide(items, index, 1);
+  return Math.max(left, right);
+}
+
+function getSpacerWallWidth(item: Extract<StackItem, { type: "spacer" }>): number {
+  return (toPositive(item.outerDiameterMm) - toPositive(item.innerDiameterMm)) / 2;
 }
 
 export function getItemAxialLength(item: StackItem): number {
@@ -89,19 +117,23 @@ export function getStackWarnings(items: StackItem[], defaults: CadDefaults): str
 
     if (item.type === "spacer") {
       if (toPositive(item.thicknessMm) === 0) {
-        warnings.push(`${item.name || "Spacer"} thickness must be positive.`);
+        warnings.push(`${item.name || "Spacer / Air Gap Ring"} thickness must be positive.`);
       }
       if (item.innerDiameterMm >= item.outerDiameterMm) {
-        warnings.push(`${item.name || "Spacer"} inner diameter must be smaller than outer diameter.`);
+        warnings.push(
+          `${item.name || "Spacer / Air Gap Ring"} inner diameter must be smaller than outer diameter.`
+        );
       }
 
-      const previousGlassClear = getNeighboringGlassClearAperture(orderedItems[i - 1]);
-      const nextGlassClear = getNeighboringGlassClearAperture(orderedItems[i + 1]);
-      const neighboringClear = Math.max(previousGlassClear, nextGlassClear);
-      if (neighboringClear > 0 && item.innerDiameterMm < neighboringClear) {
+      const nearbyAperture = getNearbyAperture(orderedItems, i);
+      if (nearbyAperture > 0 && item.innerDiameterMm < nearbyAperture) {
         warnings.push(
-          `${item.name || "Spacer"} inner diameter may vignette the neighboring glass clear aperture.`
+          `${item.name || "Spacer / Air Gap Ring"} inner diameter may vignette nearby clear aperture or iris aperture.`
         );
+      }
+
+      if (getSpacerWallWidth(item) < 1.2) {
+        warnings.push(`${item.name || "Spacer / Air Gap Ring"} wall may be fragile for FDM printing.`);
       }
     }
 
@@ -109,6 +141,12 @@ export function getStackWarnings(items: StackItem[], defaults: CadDefaults): str
       if (item.apertureDiameterMm > item.diskDiameterMm) {
         warnings.push("Iris aperture cannot be larger than disk diameter.");
       }
+
+      const nearbyAperture = getNearbyAperture(orderedItems, i);
+      if (nearbyAperture > 0 && item.apertureDiameterMm > nearbyAperture) {
+        warnings.push(`${item.name || "Iris"} aperture may exceed nearby clear aperture.`);
+      }
+
       if (item.isOval && item.ovalWidthMm && item.ovalHeightMm) {
         if (item.ovalWidthMm > item.diskDiameterMm || item.ovalHeightMm > item.diskDiameterMm) {
           warnings.push(`${item.name || "Oval iris"} oval dimensions exceed disk diameter.`);
@@ -122,6 +160,13 @@ export function getStackWarnings(items: StackItem[], defaults: CadDefaults): str
       }
       if (item.diffusionOuterDiameterMm > item.diskDiameterMm) {
         warnings.push(`${item.name || "Diffusion disk"} diffusion outer diameter exceeds disk diameter.`);
+      }
+
+      const nearbyAperture = getNearbyAperture(orderedItems, i);
+      if (nearbyAperture > 0 && item.diskDiameterMm < nearbyAperture) {
+        warnings.push(
+          `${item.name || getItemOpticalTypeLabel(item)} disk diameter may clip nearby clear aperture.`
+        );
       }
     }
 
@@ -158,6 +203,9 @@ export function getPartWarnings(item: StackItem, defaults: CadDefaults): string[
     warnings.push("Wall thickness under 1.2mm may be fragile for FDM printing.");
   }
 
+  if (item.type === "spacer" && getSpacerWallWidth(item) < 1.2) {
+    warnings.push("Spacer wall may be fragile for FDM printing.");
+  }
   if (item.type === "iris" && item.apertureDiameterMm > item.diskDiameterMm) {
     warnings.push("Iris aperture cannot be larger than disk diameter.");
   }

@@ -5,8 +5,10 @@ export function generateSpacerRingScad(params: SpacerRingParams): string {
   return `${scadHeader(params.partName, params.facets)}inner_diameter = ${n(params.innerDiameterMm)};
 outer_diameter = ${n(params.outerDiameterMm)};
 thickness = ${n(params.thicknessMm)};
+chamfer_enabled = ${params.chamferEnabled ? "true" : "false"};
+chamfer_mm = ${n(params.chamferMm ?? 0)};
 
-module spacer_ring() {
+module spacer_air_gap_ring() {
   difference() {
     cylinder(h = thickness, d = outer_diameter);
     translate([0, 0, -0.1])
@@ -14,6 +16,6 @@ module spacer_ring() {
   }
 }
 
-${params.hasAntiReflectionGrooves ? "// TODO: anti-reflection groove geometry\n" : ""}spacer_ring();
+${params.hasAntiReflectionGrooves ? "// TODO: anti-reflection groove geometry\n" : ""}${params.chamferEnabled ? "// TODO: chamfer geometry\n" : ""}spacer_air_gap_ring();
 `;
 }

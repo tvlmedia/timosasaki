@@ -2,12 +2,12 @@ import type { OpticalItemType, StackItem, StackItemType } from "@/types";
 
 export const opticalTypeOptions: Array<{ value: OpticalItemType; label: string }> = [
   { value: "GLASS", label: "Glass" },
-  { value: "AIR_GAP", label: "Air Gap" },
+  { value: "AIR_GAP", label: "Air Gap (Set By Ring)" },
   { value: "IRIS", label: "Iris" },
   { value: "DIFFUSION", label: "Diffusion" },
   { value: "FILTER", label: "Filter" },
   { value: "EFFECT", label: "Effect" },
-  { value: "SPACER", label: "Spacer" },
+  { value: "SPACER", label: "Spacer / Air Gap Ring" },
   { value: "MOUNT", label: "Mount" },
   { value: "BARREL", label: "Barrel" },
   { value: "RETAINING_RING", label: "Retaining Ring" },

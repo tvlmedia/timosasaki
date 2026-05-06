@@ -1,18 +1,21 @@
 "use client";
 
 import { getItemAxialLength } from "@/lib/calculations";
-import { getItemOpticalTypeLabel } from "@/lib/stackMeta";
+import { getItemOpticalType, getItemOpticalTypeLabel } from "@/lib/stackMeta";
 import type { StackItem } from "@/types";
 
-const colorByType: Record<StackItem["type"], string> = {
-  glass: "#4aa3ff",
-  spacer: "#7a7a7a",
-  iris: "#f5a437",
-  diffusion: "#bf6cff",
-  mount: "#2dc57b",
-  barrel: "#3f3f3f",
-  retaining_ring: "#7cb3bf",
-  custom: "#9a9a9a"
+const styleByOpticalType = {
+  GLASS: { stroke: "#4aa3ff", fill: "#0f0f0f", dash: undefined as string | undefined },
+  AIR_GAP: { stroke: "#5f6773", fill: "#090909", dash: "4 3" },
+  IRIS: { stroke: "#f5a437", fill: "#0f0f0f", dash: undefined as string | undefined },
+  DIFFUSION: { stroke: "#bf6cff", fill: "#0f0f0f", dash: undefined as string | undefined },
+  FILTER: { stroke: "#ffb347", fill: "#0f0f0f", dash: undefined as string | undefined },
+  EFFECT: { stroke: "#bf6cff", fill: "#0f0f0f", dash: undefined as string | undefined },
+  SPACER: { stroke: "#7a7a7a", fill: "#0f0f0f", dash: undefined as string | undefined },
+  RETAINING_RING: { stroke: "#4e4e4e", fill: "#0f0f0f", dash: undefined as string | undefined },
+  BARREL: { stroke: "#585858", fill: "none", dash: undefined as string | undefined },
+  MOUNT: { stroke: "#2dc57b", fill: "#0f0f0f", dash: undefined as string | undefined },
+  CUSTOM: { stroke: "#c8c8c8", fill: "#0f0f0f", dash: undefined as string | undefined }
 };
 
 export function StackPreview2D({
@@ -43,6 +46,8 @@ export function StackPreview2D({
           const x = cursor;
           cursor += width + 4;
           const selected = item.id === selectedId;
+          const opticalType = getItemOpticalType(item);
+          const style = styleByOpticalType[opticalType];
 
           return (
             <g key={item.id} onClick={() => onSelect(item.id)} className="cursor-pointer">
@@ -51,9 +56,10 @@ export function StackPreview2D({
                 y={48}
                 width={width}
                 height={92}
-                fill={selected ? "#102840" : "#0f0f0f"}
-                stroke={colorByType[item.type]}
+                fill={selected ? "#102840" : style.fill}
+                stroke={style.stroke}
                 strokeWidth={selected ? 2.2 : 1.2}
+                strokeDasharray={style.dash}
                 rx={8}
               />
               <text x={x + width / 2} y={95} fill="#f5f5f5" textAnchor="middle" fontSize="10">

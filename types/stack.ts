@@ -52,6 +52,8 @@ export type SpacerItem = BaseStackItem & {
   outerDiameterMm: number;
   thicknessMm: number;
   hasAntiReflectionGrooves?: boolean;
+  chamferEnabled?: boolean;
+  chamferMm?: number;
 };
 
 export type IrisItem = BaseStackItem & {

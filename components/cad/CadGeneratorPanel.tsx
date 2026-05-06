@@ -7,6 +7,7 @@ import { ScadCodeViewer } from "@/components/cad/ScadCodeViewer";
 import { Select } from "@/components/common/Select";
 import { WarningBox } from "@/components/common/WarningBox";
 import { getPartWarnings, getRecommendedBarrelInnerDiameter, getRecommendedBarrelOuterDiameter } from "@/lib/calculations";
+import { generateFreecadMacro, type FreecadPayload } from "@/lib/freecad";
 import { safeFileName } from "@/lib/ids";
 import { generateScad, type ScadPayload } from "@/lib/scad";
 import { downloadTextFile } from "@/lib/storage";
@@ -25,6 +26,10 @@ const needsSource: Record<CadPartType, StackItem["type"] | null> = {
 
 function pretty(value: number): string {
   return value.toFixed(2);
+}
+
+function toMmToken(value: number): string {
+  return value.toFixed(1).replace(".", "_");
 }
 
 function createPayload(project: LensProject, partType: CadPartType, source?: StackItem): ScadPayload {
@@ -51,14 +56,17 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
     }
     case "spacer_ring": {
       const spacer = source?.type === "spacer" ? source : undefined;
+      const spacerPartName = `spacer_air_gap_${safeFileName(sourceName || "ring")}`;
       return {
         type: "spacer_ring",
         params: {
-          partName,
+          partName: spacerPartName,
           innerDiameterMm: spacer?.innerDiameterMm ?? defaults.defaultInnerDiameterMm,
           outerDiameterMm: spacer?.outerDiameterMm ?? defaults.defaultOuterDiameterMm,
           thicknessMm: spacer?.thicknessMm ?? defaults.partThicknessMm,
           hasAntiReflectionGrooves: Boolean(spacer?.hasAntiReflectionGrooves),
+          chamferEnabled: Boolean(spacer?.chamferEnabled),
+          chamferMm: spacer?.chamferMm ?? 0.2,
           facets: defaults.facets
         }
       };
@@ -175,6 +183,7 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
 export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const [partType, setPartType] = useState<CadPartType>("element_cup");
   const [sourceItemId, setSourceItemId] = useState<string | undefined>();
+  const [exportMode, setExportMode] = useState<"openscad" | "freecad_macro">("openscad");
 
   const sourceCandidates = useMemo(() => {
     const requiredType = needsSource[partType];
@@ -192,7 +201,23 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
 
   const sourceItem = sourceCandidates.find((item) => item.id === sourceItemId);
   const payload = createPayload(project, partType, sourceItem);
-  const code = generateScad(payload);
+  const freecadPayload: FreecadPayload | null =
+    payload.type === "spacer_ring"
+      ? {
+          type: "spacer_ring",
+          params: payload.params
+        }
+      : null;
+  const code =
+    exportMode === "freecad_macro"
+      ? freecadPayload
+        ? generateFreecadMacro(freecadPayload)
+        : "# FreeCAD export is currently available for Spacer / Air Gap Ring only."
+      : generateScad(payload);
+  const exportModeWarnings =
+    exportMode === "freecad_macro" && !freecadPayload
+      ? ["FreeCAD macro export is currently available for Spacer / Air Gap Ring only."]
+      : [];
   const partWarnings = sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : [];
 
   const specs = useMemo(() => {
@@ -213,6 +238,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
       values.thickness = `${pretty(payload.params.thicknessMm)} mm`;
       values.anti_reflection_grooves = payload.params.hasAntiReflectionGrooves;
+      values.chamfer_enabled = Boolean(payload.params.chamferEnabled);
+      values.chamfer_mm = `${pretty(payload.params.chamferMm ?? 0)} mm`;
       return values;
     }
 
@@ -285,13 +312,20 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
 
   const onDownload = () => {
     const partLabel = safeFileName(payload.params.partName);
-    const filename = `timo_sasaki_lens_lab_${safeFileName(project.name)}_${partLabel}.scad`;
+    const spacerThicknessToken =
+      payload.type === "spacer_ring" ? `${toMmToken(payload.params.thicknessMm)}mm` : undefined;
+    const filenameCore =
+      payload.type === "spacer_ring" && spacerThicknessToken
+        ? `sasaki_lens_lab_${partLabel}_${spacerThicknessToken}`
+        : `sasaki_lens_lab_${safeFileName(project.name)}_${partLabel}`;
+    const extension = exportMode === "freecad_macro" ? "FCMacro" : "scad";
+    const filename = `${filenameCore}.${extension}`;
     downloadTextFile(filename, code);
   };
 
   return (
     <div className="space-y-4">
-      <div className="panel grid gap-4 p-4 md:grid-cols-2">
+      <div className="panel grid gap-4 p-4 md:grid-cols-3">
         <CadPartSelector value={partType} onChange={setPartType} />
         <Select
           label="Source Item"
@@ -306,12 +340,27 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
             </option>
           ))}
         </Select>
+        <Select
+          label="CAD Export Mode"
+          value={exportMode}
+          onChange={(event) => setExportMode(event.target.value as "openscad" | "freecad_macro")}
+        >
+          <option value="openscad">OpenSCAD (.scad)</option>
+          <option value="freecad_macro">FreeCAD Macro (.FCMacro)</option>
+        </Select>
       </div>
 
       <PartSpecCard title="Part Specs" specs={specs} />
+      <WarningBox title="Export Mode Notes" lines={exportModeWarnings} />
       <WarningBox title="Part Warnings" lines={partWarnings} />
       <WarningBox title="Safety Checks" lines={safetyWarnings} />
-      <ScadCodeViewer code={code} onDownload={onDownload} />
+      <ScadCodeViewer
+        code={code}
+        onDownload={onDownload}
+        codeTitle={exportMode === "freecad_macro" ? "FreeCAD Macro" : "OpenSCAD Code"}
+        copyLabel={exportMode === "freecad_macro" ? "Copy FreeCAD Macro" : "Copy OpenSCAD"}
+        downloadLabel={exportMode === "freecad_macro" ? "Download .FCMacro" : "Download .scad"}
+      />
     </div>
   );
 }

@@ -39,13 +39,16 @@ function createStackItem(type: StackItemType, index: number): StackItem {
     case "spacer":
       return {
         id,
-        name: "New spacer",
+        name: "New spacer / air gap ring",
         type,
         opticalType,
         positionIndex: index,
-        innerDiameterMm: 26,
-        outerDiameterMm: 34,
-        thicknessMm: 2
+        innerDiameterMm: 28,
+        outerDiameterMm: 38,
+        thicknessMm: 1,
+        hasAntiReflectionGrooves: false,
+        chamferEnabled: false,
+        chamferMm: 0.2
       };
     case "iris":
       return {
@@ -131,9 +134,14 @@ function validateItem(item: StackItem): string[] {
       break;
     case "spacer":
       if (invalid(item.innerDiameterMm) || invalid(item.outerDiameterMm) || invalid(item.thicknessMm)) {
-        errors.push("Spacer dimensions must be positive.");
+        errors.push("Spacer / Air Gap Ring dimensions must be positive.");
       }
-      if (item.innerDiameterMm >= item.outerDiameterMm) errors.push("Spacer inner diameter must be smaller than outer.");
+      if (item.innerDiameterMm >= item.outerDiameterMm) {
+        errors.push("Spacer / Air Gap Ring inner diameter must be smaller than outer.");
+      }
+      if (item.chamferEnabled && invalid(item.chamferMm)) {
+        errors.push("Chamfer must be positive when enabled.");
+      }
       break;
     case "iris":
       if (invalid(item.diskDiameterMm) || invalid(item.apertureDiameterMm) || invalid(item.thicknessMm)) {
@@ -380,6 +388,10 @@ export function StackBuilder({
 
               {selectedItem.type === "spacer" && (
                 <>
+                  <p className="rounded-lg border border-labBorder bg-[#0b0b0b] px-3 py-2 text-xs leading-relaxed text-labMuted">
+                    A physical ring/shim that sets the optical air gap between parts. The inner hole stays open for
+                    the light path.
+                  </p>
                   <NumberInput
                     label="Inner diameter (mm)"
                     value={selectedItem.innerDiameterMm}
@@ -426,6 +438,32 @@ export function StackBuilder({
                     />
                     Anti-reflection grooves
                   </label>
+                  <label className="flex items-center gap-2 text-sm text-labMuted">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedItem.chamferEnabled)}
+                      onChange={(event) =>
+                        updateTypedItem(selectedItem.id, "spacer", (entry) => ({
+                          ...entry,
+                          chamferEnabled: event.target.checked
+                        }))
+                      }
+                    />
+                    Chamfer enabled
+                  </label>
+                  {selectedItem.chamferEnabled && (
+                    <NumberInput
+                      label="Chamfer (mm)"
+                      value={selectedItem.chamferMm ?? ""}
+                      min={0}
+                      onChange={(event) =>
+                        updateTypedItem(selectedItem.id, "spacer", (entry) => ({
+                          ...entry,
+                          chamferMm: event.target.value ? Number(event.target.value) : undefined
+                        }))
+                      }
+                    />
+                  )}
                 </>
               )}
 

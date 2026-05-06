@@ -71,12 +71,14 @@ export function createDemoProject(): LensProject {
         id: "spacer1",
         type: "spacer",
         opticalType: "SPACER",
-        name: "Spacer E1-E2",
+        name: "Spacer / Air Gap Ring E1-E2",
         positionIndex: 1,
         innerDiameterMm: 28,
         outerDiameterMm: 38,
         thicknessMm: 5,
-        hasAntiReflectionGrooves: false
+        hasAntiReflectionGrooves: false,
+        chamferEnabled: false,
+        chamferMm: 0.2
       },
       {
         id: "e2",
@@ -122,12 +124,14 @@ export function createDemoProject(): LensProject {
         id: "spacer2",
         type: "spacer",
         opticalType: "SPACER",
-        name: "Spacer iris-rear group",
+        name: "Spacer / Air Gap Ring iris-rear group",
         positionIndex: 5,
         innerDiameterMm: 24,
         outerDiameterMm: 38,
         thicknessMm: 12,
-        hasAntiReflectionGrooves: false
+        hasAntiReflectionGrooves: false,
+        chamferEnabled: false,
+        chamferMm: 0.2
       },
       {
         id: "rear",

@@ -1,18 +1,21 @@
 "use client";
 
 import { Button } from "@/components/common/Button";
-import { getItemOpticalTypeLabel } from "@/lib/stackMeta";
+import { getItemOpticalType, getItemOpticalTypeLabel } from "@/lib/stackMeta";
 import type { StackItem } from "@/types";
 
-const colorByType: Record<StackItem["type"], string> = {
-  glass: "border-[#4aa3ff]",
-  spacer: "border-[#777]",
-  iris: "border-[#ffaa33]",
-  diffusion: "border-[#bf6cff]",
-  mount: "border-[#2dc57b]",
-  barrel: "border-[#5d5d5d]",
-  retaining_ring: "border-[#89b6c7]",
-  custom: "border-[#a6a6a6]"
+const colorByOpticalType = {
+  GLASS: "border-[#4aa3ff]",
+  AIR_GAP: "border-[#5f6773] border-dashed",
+  IRIS: "border-[#f5a437]",
+  DIFFUSION: "border-[#bf6cff]",
+  FILTER: "border-[#ffb347]",
+  EFFECT: "border-[#bf6cff]",
+  SPACER: "border-[#7a7a7a]",
+  RETAINING_RING: "border-[#4e4e4e]",
+  BARREL: "border-[#5d5d5d]",
+  MOUNT: "border-[#2dc57b]",
+  CUSTOM: "border-[#c8c8c8]"
 };
 
 export function StackItemCard({
@@ -35,10 +38,12 @@ export function StackItemCard({
   onToggleLock: () => void;
 }) {
   const opticalTypeLabel = getItemOpticalTypeLabel(item);
+  const opticalType = getItemOpticalType(item);
+  const borderClass = colorByOpticalType[opticalType];
 
   return (
     <div
-      className={`rounded-xl border bg-[#0b0b0b] p-3 ${selected ? "border-labAccent" : colorByType[item.type]}`}
+      className={`rounded-xl border bg-[#0b0b0b] p-3 ${selected ? "border-labAccent" : borderClass}`}
       onClick={onSelect}
       role="button"
       tabIndex={0}

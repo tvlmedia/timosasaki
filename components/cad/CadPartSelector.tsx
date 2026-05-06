@@ -14,10 +14,10 @@ export type CadPartType =
 
 const partOptions: Array<{ value: CadPartType; label: string }> = [
   { value: "element_cup", label: "Element cup from glass item" },
-  { value: "spacer_ring", label: "Spacer ring from spacer item" },
+  { value: "spacer_ring", label: "Spacer / Air Gap Ring from spacer item" },
   { value: "iris_disk", label: "Iris disk from iris item" },
   { value: "diffusion_holder", label: "Diffusion holder from diffusion item" },
-  { value: "retaining_ring", label: "Retaining ring from retaining item" },
+  { value: "retaining_ring", label: "Retaining ring from retaining ring item" },
   { value: "main_barrel", label: "Main barrel" },
   { value: "moving_carrier", label: "Moving carrier" },
   { value: "cam_sleeve", label: "Cam sleeve" }
