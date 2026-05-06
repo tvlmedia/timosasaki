@@ -23,10 +23,7 @@ import type {
 } from "@/types";
 
 function normalizePositions(items: StackItem[]): StackItem[] {
-  return items
-    .slice()
-    .sort((a, b) => a.positionIndex - b.positionIndex)
-    .map((item, index) => ({ ...item, positionIndex: index }));
+  return items.map((item, index) => ({ ...item, positionIndex: index }));
 }
 
 function createStackItem(type: StackItemType, index: number): StackItem {
