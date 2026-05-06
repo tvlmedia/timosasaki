@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { getRecommendedBarrelInnerDiameter } from "@/lib/calculations";
 import { createId } from "@/lib/ids";
 import { defaultOpticalTypeByStackType, getItemOpticalType, opticalTypeOptions } from "@/lib/stackMeta";
 import { Button } from "@/components/common/Button";
@@ -12,7 +13,7 @@ import { AddStackItemModal } from "@/components/stack/AddStackItemModal";
 import { StackItemCard } from "@/components/stack/StackItemCard";
 import { StackPreview2D } from "@/components/stack/StackPreview2D";
 import { StackSummary } from "@/components/stack/StackSummary";
-import type { LensProject, OpticalItemType, StackItem, StackItemType } from "@/types";
+import type { CadDefaults, LensProject, OpticalItemType, StackItem, StackItemType } from "@/types";
 
 function normalizePositions(items: StackItem[]): StackItem[] {
   return items
@@ -119,6 +120,85 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         lengthMm: 0
       };
   }
+}
+
+function toPositive(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
+  return value;
+}
+
+function getApertureCandidate(item?: StackItem): number {
+  if (!item) return 0;
+  if (item.type === "glass") return toPositive(item.clearApertureMm ?? item.diameterMm - 2);
+  if (item.type === "iris") return toPositive(item.apertureDiameterMm);
+  if (item.type === "diffusion") return toPositive(item.clearCenterDiameterMm);
+  return 0;
+}
+
+function getNearestApertureOnSide(items: StackItem[], fromIndex: number, direction: -1 | 1): number {
+  let index = fromIndex + direction;
+  while (index >= 0 && index < items.length) {
+    const candidate = getApertureCandidate(items[index]);
+    if (candidate > 0) return candidate;
+    index += direction;
+  }
+  return 0;
+}
+
+function getNearbyAperture(items: StackItem[], index: number): number {
+  const left = getNearestApertureOnSide(items, index, -1);
+  const right = getNearestApertureOnSide(items, index, 1);
+  return Math.max(left, right);
+}
+
+function getReferenceBarrelInnerDiameter(items: StackItem[], defaults: CadDefaults, index: number): number {
+  const barrelCandidates = items
+    .map((item, itemIndex) => ({ item, itemIndex }))
+    .filter(
+      (entry): entry is { item: Extract<StackItem, { type: "barrel" }>; itemIndex: number } =>
+        entry.item.type === "barrel" && toPositive(entry.item.innerDiameterMm) > 0
+    );
+
+  if (!barrelCandidates.length) {
+    return getRecommendedBarrelInnerDiameter(items, defaults);
+  }
+
+  const closest = barrelCandidates.reduce((best, current) => {
+    const bestDistance = Math.abs(best.itemIndex - index);
+    const currentDistance = Math.abs(current.itemIndex - index);
+    return currentDistance < bestDistance ? current : best;
+  });
+
+  return toPositive(closest.item.innerDiameterMm);
+}
+
+function deriveSpacerRingDimensions(items: StackItem[], defaults: CadDefaults, index: number): {
+  innerDiameterMm: number;
+  outerDiameterMm: number;
+} {
+  const barrelInner = getReferenceBarrelInnerDiameter(items, defaults, index);
+  const fitClearancePerSide = Math.max(defaults.radialClearanceMm + defaults.printToleranceMm, 0.25);
+  const outerDiameterMm = Math.max(12, barrelInner - fitClearancePerSide * 2);
+
+  const nearbyAperture = getNearbyAperture(items, index);
+  const preferredWallWidth = 1.2;
+  const minimumWallWidth = 0.8;
+  const preferredInner = outerDiameterMm - preferredWallWidth * 2;
+  const minimumUsefulInner = nearbyAperture > 0 ? nearbyAperture + 0.4 : 0;
+  const hardMaximumInner = outerDiameterMm - minimumWallWidth * 2;
+
+  const innerDiameterMm = Math.max(
+    4,
+    Math.min(
+      hardMaximumInner,
+      Math.max(minimumUsefulInner, preferredInner > 0 ? preferredInner : outerDiameterMm - minimumWallWidth * 2)
+    )
+  );
+
+  return {
+    innerDiameterMm: Number(innerDiameterMm.toFixed(2)),
+    outerDiameterMm: Number(outerDiameterMm.toFixed(2))
+  };
 }
 
 function validateItem(item: StackItem): string[] {
@@ -234,7 +314,11 @@ export function StackBuilder({
   };
 
   const addItem = (type: StackItemType) => {
-    const newItem = createStackItem(type, orderedItems.length);
+    let newItem = createStackItem(type, orderedItems.length);
+    if (newItem.type === "spacer") {
+      const auto = deriveSpacerRingDimensions(orderedItems, project.cadDefaults, orderedItems.length);
+      newItem = { ...newItem, ...auto };
+    }
     commitItems([...orderedItems, newItem]);
     setSelectedId(newItem.id);
   };
@@ -262,9 +346,32 @@ export function StackBuilder({
     }
   };
 
+  const autoFitSpacer = (id: string) => {
+    const index = orderedItems.findIndex((item) => item.id === id);
+    if (index < 0) return;
+    const target = orderedItems[index];
+    if (target.type !== "spacer") return;
+    const auto = deriveSpacerRingDimensions(orderedItems, project.cadDefaults, index);
+    updateTypedItem(id, "spacer", (entry) => ({ ...entry, ...auto }));
+  };
+
+  const autoFitAllSpacers = () => {
+    const adjusted = orderedItems.map((item, index) => {
+      if (item.type !== "spacer") return item;
+      const auto = deriveSpacerRingDimensions(orderedItems, project.cadDefaults, index);
+      return { ...item, ...auto };
+    });
+    commitItems(adjusted);
+  };
+
   return (
     <div className="space-y-4">
       <AddStackItemModal onAdd={addItem} />
+      <div className="flex justify-end">
+        <Button variant="ghost" onClick={autoFitAllSpacers} className="text-xs">
+          Auto-fit all spacer rings to barrel
+        </Button>
+      </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[360px_1fr_360px]">
         <section className="panel space-y-2 p-4">
           <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">Stack Items (Front to Sensor)</h3>
@@ -392,6 +499,13 @@ export function StackBuilder({
                     A physical ring/shim that sets the optical air gap between parts. The inner hole stays open for
                     the light path.
                   </p>
+                  <Button
+                    variant="ghost"
+                    className="w-full text-xs"
+                    onClick={() => autoFitSpacer(selectedItem.id)}
+                  >
+                    Auto-fit ring diameter to barrel
+                  </Button>
                   <NumberInput
                     label="Inner diameter (mm)"
                     value={selectedItem.innerDiameterMm}
