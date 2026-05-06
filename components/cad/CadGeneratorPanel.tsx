@@ -454,6 +454,12 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const [partType, setPartType] = useState<CadPartType>("element_cup");
   const [sourceItemId, setSourceItemId] = useState<string | undefined>();
   const [exportMode, setExportMode] = useState<"openscad" | "freecad_macro">("openscad");
+  const plAssemblyIncludeMain = project.cadDefaults.plAssemblyIncludeMainBarrelSection ?? true;
+  const plAssemblyIncludeCarrier = project.cadDefaults.plAssemblyIncludeMovingCarrier ?? true;
+  const plAssemblyIncludePins = project.cadDefaults.plAssemblyIncludeGuidePins ?? true;
+  const plAssemblyFuse = project.cadDefaults.plAssemblyFuseBarrelToPl ?? false;
+  const plStepReferencePath =
+    project.cadDefaults.plStepReferencePath ?? "cad/reference/PL_Lens_Tail.STEP";
 
   const sourceCandidates = useMemo(() => {
     const requiredType = needsSource[partType];
