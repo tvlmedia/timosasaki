@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getRecommendedBarrelInnerDiameter } from "@/lib/calculations";
 import { createId } from "@/lib/ids";
 import { defaultOpticalTypeByStackType, getItemOpticalType, opticalTypeOptions } from "@/lib/stackMeta";
@@ -47,6 +47,7 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         innerDiameterMm: 28,
         outerDiameterMm: 38,
         thicknessMm: 1,
+        autoFitToBarrel: true,
         hasAntiReflectionGrooves: false,
         chamferEnabled: false,
         chamferMm: 0.2
@@ -201,6 +202,18 @@ function deriveSpacerRingDimensions(items: StackItem[], defaults: CadDefaults, i
   };
 }
 
+function isAutoFitSpacer(item: Extract<StackItem, { type: "spacer" }>): boolean {
+  return item.autoFitToBarrel !== false;
+}
+
+function applyAutoFitSpacerDimensions(items: StackItem[], defaults: CadDefaults): StackItem[] {
+  return items.map((item, index) => {
+    if (item.type !== "spacer" || !isAutoFitSpacer(item)) return item;
+    const auto = deriveSpacerRingDimensions(items, defaults, index);
+    return { ...item, ...auto };
+  });
+}
+
 function validateItem(item: StackItem): string[] {
   const errors: string[] = [];
   if (!item.name.trim()) errors.push("Stack item name is required.");
@@ -278,13 +291,30 @@ export function StackBuilder({
   const selectedErrors = selectedItem ? validateItem(selectedItem) : [];
 
   const commitItems = (nextItems: StackItem[]) => {
-    const normalized = normalizePositions(nextItems);
+    const normalizedInput = normalizePositions(nextItems);
+    const normalized = applyAutoFitSpacerDimensions(normalizedInput, project.cadDefaults);
     onProjectChange({
       ...project,
       updatedAt: new Date().toISOString(),
       stackItems: normalized
     });
   };
+
+  useEffect(() => {
+    const adjusted = applyAutoFitSpacerDimensions(orderedItems, project.cadDefaults);
+    const changed = adjusted.some((item, index) => {
+      const current = orderedItems[index];
+      if (item.type !== "spacer" || current.type !== "spacer") return false;
+      if (!isAutoFitSpacer(current)) return false;
+      return (
+        Math.abs(item.innerDiameterMm - current.innerDiameterMm) > 0.001 ||
+        Math.abs(item.outerDiameterMm - current.outerDiameterMm) > 0.001
+      );
+    });
+    if (changed) {
+      commitItems(adjusted);
+    }
+  }, [orderedItems, project.cadDefaults]);
 
   const updateItem = (id: string, updater: (item: StackItem) => StackItem) => {
     commitItems(orderedItems.map((item) => (item.id === id ? updater(item) : item)));
@@ -314,11 +344,7 @@ export function StackBuilder({
   };
 
   const addItem = (type: StackItemType) => {
-    let newItem = createStackItem(type, orderedItems.length);
-    if (newItem.type === "spacer") {
-      const auto = deriveSpacerRingDimensions(orderedItems, project.cadDefaults, orderedItems.length);
-      newItem = { ...newItem, ...auto };
-    }
+    const newItem = createStackItem(type, orderedItems.length);
     commitItems([...orderedItems, newItem]);
     setSelectedId(newItem.id);
   };
@@ -499,17 +525,33 @@ export function StackBuilder({
                     A physical ring/shim that sets the optical air gap between parts. The inner hole stays open for
                     the light path.
                   </p>
-                  <Button
-                    variant="ghost"
-                    className="w-full text-xs"
-                    onClick={() => autoFitSpacer(selectedItem.id)}
-                  >
-                    Auto-fit ring diameter to barrel
-                  </Button>
+                  <label className="flex items-center gap-2 text-sm text-labMuted">
+                    <input
+                      type="checkbox"
+                      checked={selectedItem.autoFitToBarrel !== false}
+                      onChange={(event) =>
+                        updateTypedItem(selectedItem.id, "spacer", (entry) => ({
+                          ...entry,
+                          autoFitToBarrel: event.target.checked
+                        }))
+                      }
+                    />
+                    Auto-fit diameters to barrel (recommended)
+                  </label>
+                  {selectedItem.autoFitToBarrel !== false && (
+                    <Button
+                      variant="ghost"
+                      className="w-full text-xs"
+                      onClick={() => autoFitSpacer(selectedItem.id)}
+                    >
+                      Recalculate auto-fit now
+                    </Button>
+                  )}
                   <NumberInput
                     label="Inner diameter (mm)"
                     value={selectedItem.innerDiameterMm}
                     min={0}
+                    disabled={selectedItem.autoFitToBarrel !== false}
                     onChange={(event) =>
                       updateTypedItem(selectedItem.id, "spacer", (entry) => ({
                         ...entry,
@@ -521,6 +563,7 @@ export function StackBuilder({
                     label="Outer diameter (mm)"
                     value={selectedItem.outerDiameterMm}
                     min={0}
+                    disabled={selectedItem.autoFitToBarrel !== false}
                     onChange={(event) =>
                       updateTypedItem(selectedItem.id, "spacer", (entry) => ({
                         ...entry,

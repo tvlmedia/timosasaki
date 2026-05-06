@@ -76,6 +76,7 @@ export function createDemoProject(): LensProject {
         innerDiameterMm: 28,
         outerDiameterMm: 38,
         thicknessMm: 5,
+        autoFitToBarrel: true,
         hasAntiReflectionGrooves: false,
         chamferEnabled: false,
         chamferMm: 0.2
@@ -129,6 +130,7 @@ export function createDemoProject(): LensProject {
         innerDiameterMm: 24,
         outerDiameterMm: 38,
         thicknessMm: 12,
+        autoFitToBarrel: true,
         hasAntiReflectionGrooves: false,
         chamferEnabled: false,
         chamferMm: 0.2

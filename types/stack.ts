@@ -51,6 +51,7 @@ export type SpacerItem = BaseStackItem & {
   innerDiameterMm: number;
   outerDiameterMm: number;
   thicknessMm: number;
+  autoFitToBarrel?: boolean;
   hasAntiReflectionGrooves?: boolean;
   chamferEnabled?: boolean;
   chamferMm?: number;
