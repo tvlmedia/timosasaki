@@ -76,10 +76,15 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
       const seatDiameterMm = glassDiameterMm + seatClearanceMm;
       const minimumOuterFromSeat = seatDiameterMm + Math.max(defaults.wallThicknessMm * 2, 1.6);
       const nearestBarrelInner = getNearestBarrelInnerDiameter(project.stackItems, source);
+      const recommendedBarrelInner = getRecommendedBarrelInnerDiameter(project.stackItems, defaults);
+      const effectiveBarrelInner = Math.max(
+        toPositive(nearestBarrelInner),
+        toPositive(recommendedBarrelInner)
+      );
       const fitClearancePerSide = Math.max(defaults.radialClearanceMm + defaults.printToleranceMm, 0.25);
       const barrelFitOuter =
-        nearestBarrelInner && nearestBarrelInner > 0
-          ? nearestBarrelInner - fitClearancePerSide * 2
+        effectiveBarrelInner > 0
+          ? effectiveBarrelInner - fitClearancePerSide * 2
           : undefined;
       const resolvedOuterDiameter = Math.max(
         minimumOuterFromSeat,
