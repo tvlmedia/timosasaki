@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/common/Button";
 import { ExperimentCard } from "@/components/experiments/ExperimentCard";
@@ -12,12 +11,11 @@ import { getProject, saveProject } from "@/lib/storage";
 import type { Experiment, LensProject } from "@/types";
 
 export default function ExperimentsPage() {
-  const searchParams = useSearchParams();
   const [project, setProject] = useState<LensProject | null>(null);
   const [loading, setLoading] = useState(true);
-  const projectId = searchParams.get("projectId") ?? "";
 
   useEffect(() => {
+    const projectId = new URLSearchParams(window.location.search).get("projectId") ?? "";
     if (!projectId) {
       setProject(null);
       setLoading(false);
@@ -25,7 +23,7 @@ export default function ExperimentsPage() {
     }
     setProject(getProject(projectId) ?? null);
     setLoading(false);
-  }, [projectId]);
+  }, []);
 
   if (loading) {
     return (
