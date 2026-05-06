@@ -385,6 +385,15 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
 
   const sourceItem = sourceCandidates.find((item) => item.id === sourceItemId);
   const payload = createPayload(project, partType, sourceItem);
+  const slidingCarrierPayloadForAssembly = createPayload(
+    project,
+    "sliding_optical_carrier",
+    sourceItem
+  );
+  const slidingCarrierParamsForAssembly =
+    slidingCarrierPayloadForAssembly.type === "sliding_optical_carrier"
+      ? slidingCarrierPayloadForAssembly.params
+      : undefined;
   const freecadPayload: FreecadPayload | null = (() => {
     if (payload.type === "spacer_ring") {
       return { type: "spacer_ring", params: payload.params };
@@ -393,6 +402,28 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       return { type: "element_cup", params: payload.params };
     }
     if (payload.type === "fixed_pl_barrel_with_slots") {
+      if (slidingCarrierParamsForAssembly) {
+        const focus = calculateFocusTravel(normalizeFocusTravelSetup(project.focusTravel));
+        return {
+          type: "sliding_focus_assembly",
+          params: {
+            partName: `${payload.params.partName}_pl_assembly`,
+            plStepReferencePath: project.cadDefaults.plStepReferencePath,
+            fixedBarrel: payload.params,
+            slidingCarrier: slidingCarrierParamsForAssembly,
+            includeMainBarrelSection: project.cadDefaults.plAssemblyIncludeMainBarrelSection,
+            includeSlidingCarrier: project.cadDefaults.plAssemblyIncludeMovingCarrier,
+            includeGuidePins: project.cadDefaults.plAssemblyIncludeGuidePins,
+            guidePinDiameterMm: payload.params.pinDiameterMm,
+            guidePinLengthMm: Math.max(payload.params.slotWidthMm * 4, 8),
+            fuseBarrelToPl: project.cadDefaults.plAssemblyFuseBarrelToPl,
+            focusPrototypeStartMm: focus.prototypeStartMm,
+            recommendedPrototypeTravelMm: focus.recommendedPrototypeTravelMm,
+            targetMountThroatDiameterMm: normalizeFocusTravelSetup(project.focusTravel)
+              .targetMountThroatDiameterMm
+          }
+        };
+      }
       return { type: "fixed_pl_barrel_with_slots", params: payload.params };
     }
     if (payload.type === "sliding_optical_carrier") {
