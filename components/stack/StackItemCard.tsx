@@ -24,6 +24,35 @@ function formatMm(value: number | undefined): string | null {
   return `${text}mm`;
 }
 
+function startCase(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getGlassDescriptor(item: Extract<StackItem, { type: "glass" }>): string {
+  const size =
+    item.diameterMm > 0 && item.thicknessMm > 0
+      ? `Ø${formatMm(item.diameterMm)} × ${formatMm(item.thicknessMm)}`
+      : "";
+
+  if (item.physicalComponentMode === "optical_group") {
+    const groupType = item.groupType ? startCase(item.groupType) : "Unknown group";
+    const count = item.opticalSubElements?.length ?? 0;
+    return [groupType, `${count} optical ${count === 1 ? "element" : "elements"}`, size ? `physical block ${size}` : ""]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  const elementType =
+    item.elementOverallType && item.elementOverallType !== "unknown"
+      ? startCase(item.elementOverallType)
+      : "Unknown";
+  return [elementType, "single glass element", size].filter(Boolean).join(" · ");
+}
+
 function getQuickSpecs(item: StackItem): string {
   switch (item.type) {
     case "glass":
@@ -100,6 +129,7 @@ export function StackItemCard({
   const opticalType = getItemOpticalType(item);
   const borderClass = colorByOpticalType[opticalType];
   const quickSpecs = getQuickSpecs(item);
+  const glassDescriptor = item.type === "glass" ? getGlassDescriptor(item) : "";
 
   return (
     <div
@@ -115,6 +145,7 @@ export function StackItemCard({
         <p className="text-sm font-medium text-labText">{item.name}</p>
         <span className="text-xs uppercase tracking-wide text-labMuted">{opticalTypeLabel}</span>
       </div>
+      {glassDescriptor && <p className="mb-2 text-xs text-labMuted">{glassDescriptor}</p>}
       {quickSpecs && <p className="mono mb-2 text-[11px] text-labMuted">{quickSpecs}</p>}
       <div className="grid grid-cols-4 gap-1">
         <Button variant="ghost" onClick={onMoveUp} className="px-2 py-1 text-[11px]">

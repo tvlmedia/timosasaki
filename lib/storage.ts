@@ -50,7 +50,15 @@ export function normalizeProject(project: LensProject): LensProject {
       ...(project.cadDefaults ?? {})
     },
     stackItems: [...(project.stackItems ?? [])]
-      .map((item, index) => ({ ...item, positionIndex: index }))
+      .map((item, index) => {
+        const base = { ...item, positionIndex: index };
+        if (base.type !== "glass") return base;
+        return {
+          ...base,
+          physicalComponentMode: base.physicalComponentMode ?? "single_element",
+          opticalSubElements: base.opticalSubElements ?? []
+        };
+      })
       .sort((a, b) => a.positionIndex - b.positionIndex),
     experiments: project.experiments ?? [],
     measurements: normalizedMeasurements,
@@ -76,7 +84,14 @@ function normalizeMeasurements(
       y: Number.isFinite(annotation.y) ? annotation.y : 0.1,
       width: Number.isFinite(annotation.width) ? annotation.width : 0.2,
       height: Number.isFinite(annotation.height) ? annotation.height : 0.2,
-      fields: annotation.fields ?? {},
+      fields:
+        annotation.itemType === "glass"
+          ? {
+              ...(annotation.fields ?? {}),
+              physicalComponentMode: annotation.fields?.physicalComponentMode ?? "single_element",
+              opticalSubElements: annotation.fields?.opticalSubElements ?? []
+            }
+          : (annotation.fields ?? {}),
       createdAt: annotation.createdAt ?? nowIso,
       updatedAt: annotation.updatedAt ?? nowIso
     })),

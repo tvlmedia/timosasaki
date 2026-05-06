@@ -1,6 +1,9 @@
 import type {
   ElementOverallType,
   ElementOrientation,
+  OpticalGroupType,
+  OpticalSubElement,
+  PhysicalComponentMode,
   OpticalPowerGuess,
   StepDirection,
   SurfaceShape
@@ -55,6 +58,11 @@ export type GlassItem = BaseStackItem & {
   edgeThicknessMm?: number;
   clearApertureMm?: number;
   flipped: boolean;
+  physicalComponentMode?: PhysicalComponentMode;
+  groupId?: string;
+  groupType?: OpticalGroupType;
+  groupOpticalPowerGuess?: OpticalPowerGuess;
+  opticalSubElements?: OpticalSubElement[];
   elementId?: string;
   role?: string;
   elementOverallType?: ElementOverallType;

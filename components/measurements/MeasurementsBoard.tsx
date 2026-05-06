@@ -15,7 +15,10 @@ import type {
   MeasurementAnnotation,
   MeasurementFields,
   MeasurementItemType,
+  OpticalGroupType,
+  OpticalSubElement,
   OpticalPowerGuess,
+  PhysicalComponentMode,
   StepDirection,
   SurfaceShape,
   StackItem
@@ -51,6 +54,19 @@ const calibrationReferenceTypeOptions: Array<{ value: CalibrationReferenceType; 
   { value: "other", label: "Other" }
 ];
 
+const physicalComponentModeOptions: Array<{ value: PhysicalComponentMode; label: string }> = [
+  { value: "single_element", label: "Single glass element" },
+  { value: "optical_group", label: "Optical group / lens block" }
+];
+
+const opticalGroupTypeOptions: Array<{ value: OpticalGroupType; label: string }> = [
+  { value: "cemented_doublet", label: "Cemented doublet" },
+  { value: "cemented_triplet", label: "Cemented triplet" },
+  { value: "air_spaced_group", label: "Air-spaced group" },
+  { value: "fixed_rear_group", label: "Fixed rear group" },
+  { value: "unknown_group", label: "Unknown group" }
+];
+
 const elementOverallTypeOptions: Array<{ value: ElementOverallType; label: string }> = [
   { value: "unknown", label: "Unknown / not sure" },
   { value: "biconvex", label: "Biconvex" },
@@ -59,6 +75,7 @@ const elementOverallTypeOptions: Array<{ value: ElementOverallType; label: strin
   { value: "plano_concave", label: "Plano-concave" },
   { value: "positive_meniscus", label: "Positive meniscus" },
   { value: "negative_meniscus", label: "Negative meniscus" },
+  { value: "cemented_interface_side", label: "Cemented interface side" },
   { value: "cemented_doublet", label: "Cemented doublet" },
   { value: "cemented_triplet", label: "Cemented triplet" },
   { value: "air_spaced_group", label: "Air-spaced group" },
@@ -242,10 +259,28 @@ function formatMm(value: number | undefined): string {
   return value.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
 }
 
+function createDefaultOpticalSubElement(index: number): OpticalSubElement {
+  return {
+    id: createId("sub"),
+    elementId: `E${index + 1}`,
+    label: `Sub-element ${index + 1}`,
+    role: "",
+    elementOverallType: "unknown",
+    frontSurfaceShape: "unknown",
+    rearSurfaceShape: "unknown",
+    opticalPowerGuess: "unknown",
+    notes: ""
+  };
+}
+
 function createGlassDefaultFields(index: number): MeasurementFields {
   return {
     elementId: `E${index + 1}`,
     role: "",
+    physicalComponentMode: "single_element",
+    groupType: "unknown_group",
+    groupOpticalPowerGuess: "unknown",
+    opticalSubElements: [],
     elementOverallType: "unknown",
     frontSurfaceShape: "unknown",
     rearSurfaceShape: "unknown",
@@ -303,15 +338,53 @@ function getElementTypeLabel(value: ElementOverallType | undefined): string {
   return hit?.label ?? "unknown";
 }
 
+function getOpticalGroupTypeLabel(value: OpticalGroupType | undefined): string {
+  const hit = opticalGroupTypeOptions.find((option) => option.value === value);
+  return hit?.label ?? "Unknown group";
+}
+
+function getPhysicalMode(fields: MeasurementFields): PhysicalComponentMode {
+  return fields.physicalComponentMode ?? "single_element";
+}
+
 function annotationDisplayLabel(annotation: MeasurementAnnotation): string {
   if (annotation.itemType !== "glass") return annotation.label;
 
-  const elementId = annotation.fields.elementId?.trim() || annotation.label;
-  const type = annotation.fields.elementOverallType && annotation.fields.elementOverallType !== "unknown"
-    ? getElementTypeLabel(annotation.fields.elementOverallType)
-    : "glass";
+  const mode = getPhysicalMode(annotation.fields);
+  const elementId = (mode === "optical_group" ? annotation.fields.groupId : annotation.fields.elementId)?.trim()
+    || annotation.label;
+  const type =
+    mode === "optical_group"
+      ? getOpticalGroupTypeLabel(annotation.fields.groupType)
+      : annotation.fields.elementOverallType && annotation.fields.elementOverallType !== "unknown"
+        ? getElementTypeLabel(annotation.fields.elementOverallType)
+        : "single glass element";
   const diameter = annotation.fields.diameterMm ? `Ø${formatMm(annotation.fields.diameterMm)}` : "";
   return [elementId, type, diameter].filter(Boolean).join(" — ");
+}
+
+function annotationSummary(annotation: MeasurementAnnotation): string {
+  const fields = annotation.fields;
+  if (annotation.itemType !== "glass") return "";
+
+  const mode = getPhysicalMode(fields);
+  const size = fields.diameterMm && fields.thicknessMm
+    ? `Ø${formatMm(fields.diameterMm)} × ${formatMm(fields.thicknessMm)}mm`
+    : "";
+
+  if (mode === "optical_group") {
+    const groupType = getOpticalGroupTypeLabel(fields.groupType);
+    const count = fields.opticalSubElements?.length ?? 0;
+    return [groupType, `${count} optical ${count === 1 ? "element" : "elements"}`, size ? `physical block ${size}` : ""]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  const elementType =
+    fields.elementOverallType && fields.elementOverallType !== "unknown"
+      ? getElementTypeLabel(fields.elementOverallType)
+      : "Unknown";
+  return [elementType, "single glass element", size].filter(Boolean).join(" · ");
 }
 
 function lineDistancePixels(
@@ -342,6 +415,24 @@ function mapAnnotationToStackItem(annotation: MeasurementAnnotation): StackItem 
     if (!fields.diameterMm || fields.diameterMm <= 0 || !fields.thicknessMm || fields.thicknessMm <= 0) {
       return null;
     }
+
+    const physicalComponentMode = getPhysicalMode(fields);
+    const normalizedSubElements =
+      physicalComponentMode === "optical_group"
+        ? (fields.opticalSubElements ?? [])
+            .map((entry, index) => ({
+              id: entry.id || createId("sub"),
+              elementId: entry.elementId?.trim() || undefined,
+              label: entry.label?.trim() || `Sub-element ${index + 1}`,
+              role: entry.role?.trim() || undefined,
+              elementOverallType: entry.elementOverallType ?? "unknown",
+              frontSurfaceShape: entry.frontSurfaceShape ?? "unknown",
+              rearSurfaceShape: entry.rearSurfaceShape ?? "unknown",
+              opticalPowerGuess: entry.opticalPowerGuess ?? "unknown",
+              notes: entry.notes?.trim() || undefined
+            }))
+        : [];
+
     return {
       id: createId("glass"),
       type: "glass",
@@ -353,6 +444,11 @@ function mapAnnotationToStackItem(annotation: MeasurementAnnotation): StackItem 
       edgeThicknessMm: fields.edgeThicknessMm,
       clearApertureMm: fields.clearApertureMm,
       flipped: fields.orientation === "flipped",
+      physicalComponentMode,
+      groupId: fields.groupId?.trim() || undefined,
+      groupType: fields.groupType,
+      groupOpticalPowerGuess: fields.groupOpticalPowerGuess,
+      opticalSubElements: normalizedSubElements,
       elementId: fields.elementId,
       role: fields.role,
       elementOverallType: fields.elementOverallType,
@@ -499,6 +595,8 @@ export function MeasurementsBoard({
   const [syncError, setSyncError] = useState("");
 
   const selectedAnnotation = annotations.find((annotation) => annotation.id === selectedAnnotationId) ?? annotations[0];
+  const selectedPhysicalMode =
+    selectedAnnotation?.itemType === "glass" ? getPhysicalMode(selectedAnnotation.fields) : "single_element";
   const savedCalibrationGeometry = measurements.calibration?.geometry;
   const canEditGeometry = drawMode === "idle" && !drawingStart;
 
@@ -566,6 +664,45 @@ export function MeasurementsBoard({
         [key]: value
       }
     }));
+  };
+
+  const addOpticalSubElement = () => {
+    if (!selectedAnnotation || selectedAnnotation.itemType !== "glass") return;
+    const current = selectedAnnotation.fields.opticalSubElements ?? [];
+    updateSelectedField("opticalSubElements", [...current, createDefaultOpticalSubElement(current.length)]);
+  };
+
+  const updateOpticalSubElement = <K extends keyof OpticalSubElement>(
+    subId: string,
+    key: K,
+    value: OpticalSubElement[K]
+  ) => {
+    if (!selectedAnnotation || selectedAnnotation.itemType !== "glass") return;
+    const current = selectedAnnotation.fields.opticalSubElements ?? [];
+    updateSelectedField(
+      "opticalSubElements",
+      current.map((sub) => (sub.id === subId ? { ...sub, [key]: value } : sub))
+    );
+  };
+
+  const removeOpticalSubElement = (subId: string) => {
+    if (!selectedAnnotation || selectedAnnotation.itemType !== "glass") return;
+    const current = selectedAnnotation.fields.opticalSubElements ?? [];
+    updateSelectedField(
+      "opticalSubElements",
+      current.filter((sub) => sub.id !== subId)
+    );
+  };
+
+  const moveOpticalSubElement = (subId: string, direction: -1 | 1) => {
+    if (!selectedAnnotation || selectedAnnotation.itemType !== "glass") return;
+    const current = [...(selectedAnnotation.fields.opticalSubElements ?? [])];
+    const index = current.findIndex((sub) => sub.id === subId);
+    if (index < 0) return;
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= current.length) return;
+    [current[index], current[nextIndex]] = [current[nextIndex], current[index]];
+    updateSelectedField("opticalSubElements", current);
   };
 
   const updateAnnotationGeometry = (
@@ -1394,6 +1531,9 @@ export function MeasurementsBoard({
                     <p className="mt-1 text-xs uppercase tracking-wide text-labMuted">
                       {measurementItemTypeOptions.find((option) => option.value === annotation.itemType)?.label}
                     </p>
+                    {annotationSummary(annotation) && (
+                      <p className="mt-1 text-xs text-labMuted">{annotationSummary(annotation)}</p>
+                    )}
                   </button>
                 ))}
               </div>
@@ -1437,107 +1577,347 @@ export function MeasurementsBoard({
 
                 {selectedAnnotation.itemType === "glass" && (
                   <>
-                    <SectionTitle>Identity</SectionTitle>
-                    <Input
-                      label="Element ID"
-                      value={selectedAnnotation.fields.elementId ?? ""}
-                      onChange={(event) => updateSelectedField("elementId", event.target.value)}
-                    />
-                    <Input
-                      label="Role"
-                      value={selectedAnnotation.fields.role ?? ""}
-                      onChange={(event) => updateSelectedField("role", event.target.value)}
-                    />
-
-                    <SectionTitle>Caliper Measurements</SectionTitle>
-                    <NumberInput
-                      label="Diameter (mm)"
-                      value={selectedAnnotation.fields.diameterMm ?? ""}
-                      min={0}
-                      onChange={(event) => updateSelectedField("diameterMm", parseOptionalNumber(event.target.value))}
-                    />
-                    <NumberInput
-                      label="Thickness (mm)"
-                      value={selectedAnnotation.fields.thicknessMm ?? ""}
-                      min={0}
-                      onChange={(event) => updateSelectedField("thicknessMm", parseOptionalNumber(event.target.value))}
-                    />
-                    <NumberInput
-                      label="Edge thickness (mm)"
-                      value={selectedAnnotation.fields.edgeThicknessMm ?? ""}
-                      min={0}
-                      onChange={(event) =>
-                        updateSelectedField("edgeThicknessMm", parseOptionalNumber(event.target.value))
-                      }
-                    />
-                    <NumberInput
-                      label="Clear aperture / usable optical diameter (mm)"
-                      value={selectedAnnotation.fields.clearApertureMm ?? ""}
-                      min={0}
-                      onChange={(event) =>
-                        updateSelectedField("clearApertureMm", parseOptionalNumber(event.target.value))
-                      }
-                    />
+                    <SectionTitle>Physical Component</SectionTitle>
+                    <Select
+                      label="Mode"
+                      value={selectedPhysicalMode}
+                      onChange={(event) => {
+                        const mode = event.target.value as PhysicalComponentMode;
+                        updateSelectedAnnotation((annotation) => ({
+                          ...annotation,
+                          fields: {
+                            ...annotation.fields,
+                            physicalComponentMode: mode,
+                            groupType: annotation.fields.groupType ?? "unknown_group",
+                            groupOpticalPowerGuess: annotation.fields.groupOpticalPowerGuess ?? "unknown",
+                            opticalSubElements: annotation.fields.opticalSubElements ?? []
+                          }
+                        }));
+                      }}
+                    >
+                      {physicalComponentModeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </Select>
                     <p className="text-xs text-labMuted">
-                      Optional. Leave empty if unknown. This is the usable optical diameter, not the physical glass
-                      diameter. Used for vignetting and retaining-lip warnings.
+                      Use Optical Group / Lens Block when multiple glass elements are glued, cemented, or mechanically
+                      fixed together and should be handled as one physical part in the stack.
                     </p>
 
-                    <SectionTitle>Optical Description</SectionTitle>
-                    <Select
-                      label="Overall element type"
-                      value={selectedAnnotation.fields.elementOverallType ?? "unknown"}
-                      onChange={(event) =>
-                        updateSelectedField("elementOverallType", event.target.value as ElementOverallType)
-                      }
-                    >
-                      {elementOverallTypeOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </Select>
-                    <Select
-                      label="Front surface shape"
-                      value={selectedAnnotation.fields.frontSurfaceShape ?? "unknown"}
-                      onChange={(event) => updateSelectedField("frontSurfaceShape", event.target.value as SurfaceShape)}
-                    >
-                      {surfaceShapeOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </Select>
-                    <Select
-                      label="Rear surface shape"
-                      value={selectedAnnotation.fields.rearSurfaceShape ?? "unknown"}
-                      onChange={(event) => updateSelectedField("rearSurfaceShape", event.target.value as SurfaceShape)}
-                    >
-                      {surfaceShapeOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </Select>
-                    <Select
-                      label="Optical power guess"
-                      value={selectedAnnotation.fields.opticalPowerGuess ?? "unknown"}
-                      onChange={(event) =>
-                        updateSelectedField("opticalPowerGuess", event.target.value as OpticalPowerGuess)
-                      }
-                    >
-                      {opticalPowerGuessOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </Select>
+                    {selectedPhysicalMode === "single_element" ? (
+                      <>
+                        <SectionTitle>Identity</SectionTitle>
+                        <Input
+                          label="Element ID"
+                          value={selectedAnnotation.fields.elementId ?? ""}
+                          onChange={(event) => updateSelectedField("elementId", event.target.value)}
+                        />
+                        <Input
+                          label="Role"
+                          value={selectedAnnotation.fields.role ?? ""}
+                          onChange={(event) => updateSelectedField("role", event.target.value)}
+                        />
+
+                        <SectionTitle>Caliper Measurements</SectionTitle>
+                        <NumberInput
+                          label="Diameter (mm)"
+                          value={selectedAnnotation.fields.diameterMm ?? ""}
+                          min={0}
+                          onChange={(event) => updateSelectedField("diameterMm", parseOptionalNumber(event.target.value))}
+                        />
+                        <NumberInput
+                          label="Thickness (mm)"
+                          value={selectedAnnotation.fields.thicknessMm ?? ""}
+                          min={0}
+                          onChange={(event) => updateSelectedField("thicknessMm", parseOptionalNumber(event.target.value))}
+                        />
+                        <NumberInput
+                          label="Edge thickness (mm)"
+                          value={selectedAnnotation.fields.edgeThicknessMm ?? ""}
+                          min={0}
+                          onChange={(event) =>
+                            updateSelectedField("edgeThicknessMm", parseOptionalNumber(event.target.value))
+                          }
+                        />
+                        <NumberInput
+                          label="Clear aperture / usable optical diameter (mm)"
+                          value={selectedAnnotation.fields.clearApertureMm ?? ""}
+                          min={0}
+                          onChange={(event) =>
+                            updateSelectedField("clearApertureMm", parseOptionalNumber(event.target.value))
+                          }
+                        />
+                        <p className="text-xs text-labMuted">
+                          Optional. Leave empty if unknown. This is the usable optical diameter, not the physical
+                          glass diameter. Used for vignetting and retaining-lip warnings.
+                        </p>
+
+                        <SectionTitle>Optical Description</SectionTitle>
+                        <Select
+                          label="Overall element type"
+                          value={selectedAnnotation.fields.elementOverallType ?? "unknown"}
+                          onChange={(event) =>
+                            updateSelectedField("elementOverallType", event.target.value as ElementOverallType)
+                          }
+                        >
+                          {elementOverallTypeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                        <Select
+                          label="Front surface shape"
+                          value={selectedAnnotation.fields.frontSurfaceShape ?? "unknown"}
+                          onChange={(event) => updateSelectedField("frontSurfaceShape", event.target.value as SurfaceShape)}
+                        >
+                          {surfaceShapeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                        <Select
+                          label="Rear surface shape"
+                          value={selectedAnnotation.fields.rearSurfaceShape ?? "unknown"}
+                          onChange={(event) => updateSelectedField("rearSurfaceShape", event.target.value as SurfaceShape)}
+                        >
+                          {surfaceShapeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                        <Select
+                          label="Optical power guess"
+                          value={selectedAnnotation.fields.opticalPowerGuess ?? "unknown"}
+                          onChange={(event) =>
+                            updateSelectedField("opticalPowerGuess", event.target.value as OpticalPowerGuess)
+                          }
+                        >
+                          {opticalPowerGuessOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </>
+                    ) : (
+                      <>
+                        <SectionTitle>Group Identity</SectionTitle>
+                        <Input
+                          label="Group ID"
+                          value={selectedAnnotation.fields.groupId ?? ""}
+                          onChange={(event) => updateSelectedField("groupId", event.target.value)}
+                          placeholder="E2/E3"
+                        />
+                        <Input
+                          label="Role"
+                          value={selectedAnnotation.fields.role ?? ""}
+                          onChange={(event) => updateSelectedField("role", event.target.value)}
+                          placeholder="middle group"
+                        />
+                        <Select
+                          label="Group type"
+                          value={selectedAnnotation.fields.groupType ?? "unknown_group"}
+                          onChange={(event) =>
+                            updateSelectedField("groupType", event.target.value as OpticalGroupType)
+                          }
+                        >
+                          {opticalGroupTypeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+
+                        <SectionTitle>Physical Measurements</SectionTitle>
+                        <NumberInput
+                          label="Physical diameter (mm)"
+                          value={selectedAnnotation.fields.diameterMm ?? ""}
+                          min={0}
+                          onChange={(event) => updateSelectedField("diameterMm", parseOptionalNumber(event.target.value))}
+                        />
+                        <NumberInput
+                          label="Physical thickness (mm)"
+                          value={selectedAnnotation.fields.thicknessMm ?? ""}
+                          min={0}
+                          onChange={(event) => updateSelectedField("thicknessMm", parseOptionalNumber(event.target.value))}
+                        />
+                        <NumberInput
+                          label="Clear aperture / usable optical diameter (mm)"
+                          value={selectedAnnotation.fields.clearApertureMm ?? ""}
+                          min={0}
+                          onChange={(event) =>
+                            updateSelectedField("clearApertureMm", parseOptionalNumber(event.target.value))
+                          }
+                        />
+                        <p className="text-xs text-labMuted">
+                          Optional. Leave empty if unknown. This is the usable optical diameter, not the physical
+                          glass diameter. Used for vignetting and retaining-lip warnings.
+                        </p>
+                        <Select
+                          label="Group optical power guess"
+                          value={selectedAnnotation.fields.groupOpticalPowerGuess ?? "unknown"}
+                          onChange={(event) =>
+                            updateSelectedField("groupOpticalPowerGuess", event.target.value as OpticalPowerGuess)
+                          }
+                        >
+                          {opticalPowerGuessOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+
+                        <SectionTitle>Optical Sub-elements</SectionTitle>
+                        <p className="text-xs text-labMuted">
+                          These are documentation-only optical parts inside this physical block.
+                        </p>
+                        <div className="grid gap-2">
+                          {(selectedAnnotation.fields.opticalSubElements ?? []).map((subElement, subIndex) => (
+                            <div key={subElement.id} className="rounded-xl border border-labBorder bg-[#0a0a0a] p-3">
+                              <div className="mb-2 flex items-center justify-between gap-2">
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-labMuted">
+                                  Sub-element {subIndex + 1}
+                                </p>
+                                <div className="flex gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    className="px-2 py-1 text-[11px]"
+                                    onClick={() => moveOpticalSubElement(subElement.id, -1)}
+                                    disabled={subIndex === 0}
+                                  >
+                                    Up
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    className="px-2 py-1 text-[11px]"
+                                    onClick={() => moveOpticalSubElement(subElement.id, 1)}
+                                    disabled={subIndex === (selectedAnnotation.fields.opticalSubElements ?? []).length - 1}
+                                  >
+                                    Down
+                                  </Button>
+                                  <Button
+                                    variant="danger"
+                                    className="px-2 py-1 text-[11px]"
+                                    onClick={() => removeOpticalSubElement(subElement.id)}
+                                  >
+                                    Delete
+                                  </Button>
+                                </div>
+                              </div>
+
+                              <Input
+                                label="Element ID"
+                                value={subElement.elementId ?? ""}
+                                onChange={(event) => updateOpticalSubElement(subElement.id, "elementId", event.target.value)}
+                                placeholder="E2"
+                              />
+                              <Input
+                                label="Label"
+                                value={subElement.label}
+                                onChange={(event) => updateOpticalSubElement(subElement.id, "label", event.target.value)}
+                              />
+                              <Input
+                                label="Role"
+                                value={subElement.role ?? ""}
+                                onChange={(event) => updateOpticalSubElement(subElement.id, "role", event.target.value)}
+                              />
+                              <Select
+                                label="Overall element type"
+                                value={subElement.elementOverallType ?? "unknown"}
+                                onChange={(event) =>
+                                  updateOpticalSubElement(
+                                    subElement.id,
+                                    "elementOverallType",
+                                    event.target.value as ElementOverallType
+                                  )
+                                }
+                              >
+                                {elementOverallTypeOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </Select>
+                              <Select
+                                label="Front surface shape"
+                                value={subElement.frontSurfaceShape ?? "unknown"}
+                                onChange={(event) =>
+                                  updateOpticalSubElement(
+                                    subElement.id,
+                                    "frontSurfaceShape",
+                                    event.target.value as SurfaceShape
+                                  )
+                                }
+                              >
+                                {surfaceShapeOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </Select>
+                              <Select
+                                label="Rear surface shape"
+                                value={subElement.rearSurfaceShape ?? "unknown"}
+                                onChange={(event) =>
+                                  updateOpticalSubElement(
+                                    subElement.id,
+                                    "rearSurfaceShape",
+                                    event.target.value as SurfaceShape
+                                  )
+                                }
+                              >
+                                {surfaceShapeOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </Select>
+                              <Select
+                                label="Optical power guess"
+                                value={subElement.opticalPowerGuess ?? "unknown"}
+                                onChange={(event) =>
+                                  updateOpticalSubElement(
+                                    subElement.id,
+                                    "opticalPowerGuess",
+                                    event.target.value as OpticalPowerGuess
+                                  )
+                                }
+                              >
+                                {opticalPowerGuessOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </Select>
+                              <label className="mt-2 flex flex-col gap-1 text-sm text-labMuted">
+                                <span>Notes</span>
+                                <textarea
+                                  className="min-h-16 rounded-xl border border-labBorder bg-[#090909] px-3 py-2 text-labText outline-none focus:border-labAccent"
+                                  value={subElement.notes ?? ""}
+                                  onChange={(event) => updateOpticalSubElement(subElement.id, "notes", event.target.value)}
+                                />
+                              </label>
+                            </div>
+                          ))}
+                        </div>
+                        <Button variant="secondary" onClick={addOpticalSubElement}>
+                          Add optical sub-element
+                        </Button>
+                      </>
+                    )}
 
                     <SectionTitle>Orientation</SectionTitle>
                     <Select
                       label="Orientation"
                       value={selectedAnnotation.fields.orientation ?? "unknown"}
-                      onChange={(event) => updateSelectedField("orientation", event.target.value as MeasurementFields["orientation"])}
+                      onChange={(event) =>
+                        updateSelectedField("orientation", event.target.value as MeasurementFields["orientation"])
+                      }
                     >
                       {orientationOptions.map((option) => (
                         <option key={option.value} value={option.value}>

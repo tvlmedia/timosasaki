@@ -30,6 +30,7 @@ export type ElementOverallType =
   | "plano_concave"
   | "positive_meniscus"
   | "negative_meniscus"
+  | "cemented_interface_side"
   | "cemented_doublet"
   | "cemented_triplet"
   | "air_spaced_group"
@@ -62,9 +63,35 @@ export type StepDirection = "large_side_front" | "large_side_rear" | "unknown";
 
 export type MeasurementItemType = "glass" | "spacer_ring" | "housing_barrel" | "iris_disk" | "other";
 
+export type PhysicalComponentMode = "single_element" | "optical_group";
+
+export type OpticalGroupType =
+  | "cemented_doublet"
+  | "cemented_triplet"
+  | "air_spaced_group"
+  | "fixed_rear_group"
+  | "unknown_group";
+
+export type OpticalSubElement = {
+  id: string;
+  elementId?: string;
+  label: string;
+  role?: string;
+  elementOverallType?: ElementOverallType;
+  frontSurfaceShape?: SurfaceShape;
+  rearSurfaceShape?: SurfaceShape;
+  opticalPowerGuess?: OpticalPowerGuess;
+  notes?: string;
+};
+
 export type MeasurementFields = {
   elementId?: string;
   role?: string;
+  physicalComponentMode?: PhysicalComponentMode;
+  groupId?: string;
+  groupType?: OpticalGroupType;
+  groupOpticalPowerGuess?: OpticalPowerGuess;
+  opticalSubElements?: OpticalSubElement[];
 
   elementOverallType?: ElementOverallType;
   frontSurfaceShape?: SurfaceShape;
