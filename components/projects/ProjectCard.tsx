@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Button } from "@/components/common/Button";
+import { projectDetailHref } from "@/lib/routes";
 import type { LensProject } from "@/types";
 
 export function ProjectCard({
@@ -36,7 +37,7 @@ export function ProjectCard({
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <Link href={`/projects/${project.id}`} className="inline-flex">
+        <Link href={projectDetailHref(project.id)} className="inline-flex">
           <Button variant="primary" className="w-full">
             Open
           </Button>

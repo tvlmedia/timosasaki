@@ -6,6 +6,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/common/Button";
 import { ProjectCard } from "@/components/projects/ProjectCard";
 import { ProjectForm } from "@/components/projects/ProjectForm";
+import { projectDetailHref } from "@/lib/routes";
 import { importProjectJson, saveProject, getProjects, exportProjectJson, deleteProject, duplicateProject } from "@/lib/storage";
 import type { LensProject } from "@/types";
 
@@ -74,7 +75,7 @@ export default function DashboardPage() {
             onCreated={(project) => {
               refresh();
               setShowNewForm(false);
-              router.push(`/projects/${project.id}`);
+              router.push(projectDetailHref(project.id));
             }}
           />
         </div>
@@ -91,7 +92,7 @@ export default function DashboardPage() {
             onDuplicate={(target) => {
               const duplicated = duplicateProject(target.id);
               refresh();
-              if (duplicated) router.push(`/projects/${duplicated.id}`);
+              if (duplicated) router.push(projectDetailHref(duplicated.id));
             }}
             onDelete={(target) => {
               const ok = window.confirm(`Delete project "${target.name}"?`);
