@@ -195,78 +195,73 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const code = generateScad(payload);
   const partWarnings = sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : [];
 
-  const specs = useMemo<Record<string, string | number | boolean>>(() => {
-    if (payload.type === "element_cup") {
-      return {
-        part_name: payload.params.partName,
-        glass_diameter: `${pretty(payload.params.glassDiameterMm)} mm`,
-        glass_thickness: `${pretty(payload.params.glassThicknessMm)} mm`,
-        seat_clearance: `${pretty(payload.params.seatClearanceMm)} mm`,
-        wall_thickness: `${pretty(payload.params.wallThicknessMm)} mm`
-      };
-    }
-    if (payload.type === "spacer_ring") {
-      return {
-        part_name: payload.params.partName,
-        inner_diameter: `${pretty(payload.params.innerDiameterMm)} mm`,
-        outer_diameter: `${pretty(payload.params.outerDiameterMm)} mm`,
-        thickness: `${pretty(payload.params.thicknessMm)} mm`,
-        anti_reflection_grooves: payload.params.hasAntiReflectionGrooves
-      };
-    }
-    if (payload.type === "iris_disk") {
-      return {
-        part_name: payload.params.partName,
-        disk_diameter: `${pretty(payload.params.diskDiameterMm)} mm`,
-        aperture_diameter: `${pretty(payload.params.apertureDiameterMm)} mm`,
-        oval: payload.params.isOval,
-        thickness: `${pretty(payload.params.thicknessMm)} mm`
-      };
-    }
-    if (payload.type === "diffusion_holder") {
-      return {
-        part_name: payload.params.partName,
-        disk_diameter: `${pretty(payload.params.diskDiameterMm)} mm`,
-        clear_center: `${pretty(payload.params.clearCenterDiameterMm)} mm`,
-        diffusion_outer: `${pretty(payload.params.diffusionOuterDiameterMm)} mm`,
-        thickness: `${pretty(payload.params.holderThicknessMm)} mm`
-      };
-    }
-    if (payload.type === "retaining_ring") {
-      return {
-        part_name: payload.params.partName,
-        inner_diameter: `${pretty(payload.params.innerDiameterMm)} mm`,
-        outer_diameter: `${pretty(payload.params.outerDiameterMm)} mm`,
-        thickness: `${pretty(payload.params.thicknessMm)} mm`,
-        notch_count: payload.params.notchCount
-      };
-    }
-    if (payload.type === "main_barrel") {
-      return {
-        part_name: payload.params.partName,
-        inner_diameter: `${pretty(payload.params.innerDiameterMm)} mm`,
-        outer_diameter: `${pretty(payload.params.outerDiameterMm)} mm`,
-        length: `${pretty(payload.params.lengthMm)} mm`,
-        screw_hole_count: payload.params.screwHoleCount
-      };
-    }
-    if (payload.type === "moving_carrier") {
-      return {
-        part_name: payload.params.partName,
-        inner_diameter: `${pretty(payload.params.innerDiameterMm)} mm`,
-        outer_diameter: `${pretty(payload.params.outerDiameterMm)} mm`,
-        length: `${pretty(payload.params.lengthMm)} mm`,
-        cam_pin_diameter: `${pretty(payload.params.camPinDiameterMm)} mm`
-      };
-    }
-    return {
-      part_name: payload.params.partName,
-      inner_diameter: `${pretty(payload.params.innerDiameterMm)} mm`,
-      outer_diameter: `${pretty(payload.params.outerDiameterMm)} mm`,
-      length: `${pretty(payload.params.lengthMm)} mm`,
-      rotation_degrees: payload.params.rotationDegrees,
-      axial_travel: `${pretty(payload.params.axialTravelMm)} mm`
+  const specs = useMemo(() => {
+    const values: Record<string, string | number | boolean> = {
+      part_name: payload.params.partName
     };
+
+    if (payload.type === "element_cup") {
+      values.glass_diameter = `${pretty(payload.params.glassDiameterMm)} mm`;
+      values.glass_thickness = `${pretty(payload.params.glassThicknessMm)} mm`;
+      values.seat_clearance = `${pretty(payload.params.seatClearanceMm)} mm`;
+      values.wall_thickness = `${pretty(payload.params.wallThicknessMm)} mm`;
+      return values;
+    }
+
+    if (payload.type === "spacer_ring") {
+      values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
+      values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
+      values.thickness = `${pretty(payload.params.thicknessMm)} mm`;
+      values.anti_reflection_grooves = payload.params.hasAntiReflectionGrooves;
+      return values;
+    }
+
+    if (payload.type === "iris_disk") {
+      values.disk_diameter = `${pretty(payload.params.diskDiameterMm)} mm`;
+      values.aperture_diameter = `${pretty(payload.params.apertureDiameterMm)} mm`;
+      values.oval = payload.params.isOval;
+      values.thickness = `${pretty(payload.params.thicknessMm)} mm`;
+      return values;
+    }
+
+    if (payload.type === "diffusion_holder") {
+      values.disk_diameter = `${pretty(payload.params.diskDiameterMm)} mm`;
+      values.clear_center = `${pretty(payload.params.clearCenterDiameterMm)} mm`;
+      values.diffusion_outer = `${pretty(payload.params.diffusionOuterDiameterMm)} mm`;
+      values.thickness = `${pretty(payload.params.holderThicknessMm)} mm`;
+      return values;
+    }
+
+    if (payload.type === "retaining_ring") {
+      values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
+      values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
+      values.thickness = `${pretty(payload.params.thicknessMm)} mm`;
+      values.notch_count = payload.params.notchCount;
+      return values;
+    }
+
+    if (payload.type === "main_barrel") {
+      values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
+      values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
+      values.length = `${pretty(payload.params.lengthMm)} mm`;
+      values.screw_hole_count = payload.params.screwHoleCount;
+      return values;
+    }
+
+    if (payload.type === "moving_carrier") {
+      values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
+      values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
+      values.length = `${pretty(payload.params.lengthMm)} mm`;
+      values.cam_pin_diameter = `${pretty(payload.params.camPinDiameterMm)} mm`;
+      return values;
+    }
+
+    values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
+    values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
+    values.length = `${pretty(payload.params.lengthMm)} mm`;
+    values.rotation_degrees = payload.params.rotationDegrees;
+    values.axial_travel = `${pretty(payload.params.axialTravelMm)} mm`;
+    return values;
   }, [payload]);
 
   const safetyWarnings = [
