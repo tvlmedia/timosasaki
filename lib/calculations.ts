@@ -113,6 +113,26 @@ export function getStackWarnings(items: StackItem[], defaults: CadDefaults): str
       if (toPositive(item.thicknessMm) === 0) {
         warnings.push(`${item.name || "Glass item"} thickness must be positive.`);
       }
+      if (item.advancedProfileEnabled) {
+        const segments = item.profileSegments ?? [];
+        if (!segments.length) {
+          warnings.push(`${item.name || "Glass item"} has advanced profile enabled but no profile segments.`);
+        } else {
+          const invalidSegment = segments.find(
+            (segment) => toPositive(segment.diameterMm) === 0 || toPositive(segment.depthMm) === 0
+          );
+          if (invalidSegment) {
+            warnings.push(`${item.name || "Glass item"} has profile segments with non-positive diameter or depth.`);
+          }
+
+          const profileDepth = segments.reduce((sum, segment) => sum + toPositive(segment.depthMm), 0);
+          if (profileDepth > 0 && Math.abs(profileDepth - toPositive(item.thicknessMm)) > 0.02) {
+            warnings.push(
+              `${item.name || "Glass item"} profile depth (${profileDepth.toFixed(2)}mm) does not match thickness (${toPositive(item.thicknessMm).toFixed(2)}mm).`
+            );
+          }
+        }
+      }
     }
 
     if (item.type === "spacer") {

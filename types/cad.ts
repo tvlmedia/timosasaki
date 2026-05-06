@@ -16,6 +16,11 @@ export type ElementCupParams = {
   partName: string;
   glassDiameterMm: number;
   glassThicknessMm: number;
+  profileSegments?: Array<{
+    name?: string;
+    diameterMm: number;
+    depthMm: number;
+  }>;
   seatClearanceMm: number;
   wallThicknessMm: number;
   retainingLipMm: number;

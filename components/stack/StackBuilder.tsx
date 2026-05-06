@@ -13,7 +13,14 @@ import { AddStackItemModal } from "@/components/stack/AddStackItemModal";
 import { StackItemCard } from "@/components/stack/StackItemCard";
 import { StackPreview2D } from "@/components/stack/StackPreview2D";
 import { StackSummary } from "@/components/stack/StackSummary";
-import type { CadDefaults, LensProject, OpticalItemType, StackItem, StackItemType } from "@/types";
+import type {
+  CadDefaults,
+  GlassProfileSegment,
+  LensProject,
+  OpticalItemType,
+  StackItem,
+  StackItemType
+} from "@/types";
 
 function normalizePositions(items: StackItem[]): StackItem[] {
   return items
@@ -35,6 +42,8 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         positionIndex: index,
         diameterMm: 30,
         thicknessMm: 4,
+        advancedProfileEnabled: false,
+        profileSegments: [],
         flipped: false
       };
     case "spacer":
@@ -126,6 +135,47 @@ function createStackItem(type: StackItemType, index: number): StackItem {
 function toPositive(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
   return value;
+}
+
+function sanitizeSegmentValue(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, value);
+}
+
+function getGlassProfileDepth(segments: GlassProfileSegment[] | undefined): number {
+  if (!segments?.length) return 0;
+  return segments.reduce((sum, segment) => sum + toPositive(segment.depthMm), 0);
+}
+
+function getGlassProfileMaxDiameter(segments: GlassProfileSegment[] | undefined): number {
+  if (!segments?.length) return 0;
+  return segments.reduce((max, segment) => Math.max(max, toPositive(segment.diameterMm)), 0);
+}
+
+function createDefaultGlassProfileSegment(glass: Extract<StackItem, { type: "glass" }>): GlassProfileSegment {
+  return {
+    id: createId("seg"),
+    name: "Main section",
+    diameterMm: Number(Math.max(1, glass.diameterMm).toFixed(2)),
+    depthMm: Number(Math.max(0.1, glass.thicknessMm).toFixed(2))
+  };
+}
+
+function syncAdvancedGlassProfiles(items: StackItem[]): StackItem[] {
+  return items.map((item) => {
+    if (item.type !== "glass" || !item.advancedProfileEnabled) return item;
+    const segments = item.profileSegments ?? [];
+    if (!segments.length) return item;
+
+    const profileDepth = getGlassProfileDepth(segments);
+    const profileMaxDiameter = getGlassProfileMaxDiameter(segments);
+
+    return {
+      ...item,
+      thicknessMm: profileDepth > 0 ? Number(profileDepth.toFixed(3)) : item.thicknessMm,
+      diameterMm: profileMaxDiameter > 0 ? Number(profileMaxDiameter.toFixed(3)) : item.diameterMm
+    };
+  });
 }
 
 function getApertureCandidate(item?: StackItem): number {
@@ -224,6 +274,20 @@ function validateItem(item: StackItem): string[] {
     case "glass":
       if (invalid(item.diameterMm)) errors.push("Glass diameter must be positive.");
       if (invalid(item.thicknessMm)) errors.push("Glass thickness must be positive.");
+      if (item.advancedProfileEnabled) {
+        const segments = item.profileSegments ?? [];
+        if (!segments.length) {
+          errors.push("Advanced Element Profile requires at least 1 segment.");
+        }
+        segments.forEach((segment, segmentIndex) => {
+          if (invalid(segment.diameterMm)) {
+            errors.push(`Profile segment ${segmentIndex + 1} diameter must be positive.`);
+          }
+          if (invalid(segment.depthMm)) {
+            errors.push(`Profile segment ${segmentIndex + 1} depth must be positive.`);
+          }
+        });
+      }
       break;
     case "spacer":
       if (invalid(item.innerDiameterMm) || invalid(item.outerDiameterMm) || invalid(item.thicknessMm)) {
@@ -289,10 +353,15 @@ export function StackBuilder({
 
   const selectedItem = orderedItems.find((item) => item.id === selectedId) ?? orderedItems[0];
   const selectedErrors = selectedItem ? validateItem(selectedItem) : [];
+  const selectedGlass = selectedItem?.type === "glass" ? selectedItem : undefined;
+  const selectedGlassSegments = selectedGlass?.profileSegments ?? [];
+  const selectedGlassProfileDepth = getGlassProfileDepth(selectedGlassSegments);
+  const selectedGlassProfileMaxDiameter = getGlassProfileMaxDiameter(selectedGlassSegments);
 
   const commitItems = (nextItems: StackItem[]) => {
     const normalizedInput = normalizePositions(nextItems);
-    const normalized = applyAutoFitSpacerDimensions(normalizedInput, project.cadDefaults);
+    const withProfileSync = syncAdvancedGlassProfiles(normalizedInput);
+    const normalized = applyAutoFitSpacerDimensions(withProfileSync, project.cadDefaults);
     onProjectChange({
       ...project,
       updatedAt: new Date().toISOString(),
@@ -301,16 +370,9 @@ export function StackBuilder({
   };
 
   useEffect(() => {
-    const adjusted = applyAutoFitSpacerDimensions(orderedItems, project.cadDefaults);
-    const changed = adjusted.some((item, index) => {
-      const current = orderedItems[index];
-      if (item.type !== "spacer" || current.type !== "spacer") return false;
-      if (!isAutoFitSpacer(current)) return false;
-      return (
-        Math.abs(item.innerDiameterMm - current.innerDiameterMm) > 0.001 ||
-        Math.abs(item.outerDiameterMm - current.outerDiameterMm) > 0.001
-      );
-    });
+    const withProfileSync = syncAdvancedGlassProfiles(orderedItems);
+    const adjusted = applyAutoFitSpacerDimensions(withProfileSync, project.cadDefaults);
+    const changed = adjusted.some((item, index) => JSON.stringify(item) !== JSON.stringify(orderedItems[index]));
     if (changed) {
       commitItems(adjusted);
     }
@@ -328,6 +390,81 @@ export function StackBuilder({
     updateItem(id, (item) => {
       if (item.type !== type) return item;
       return updater(item as Extract<StackItem, { type: T }>);
+    });
+  };
+
+  const setAdvancedProfileEnabled = (glassId: string, enabled: boolean) => {
+    updateTypedItem(glassId, "glass", (entry) => {
+      if (!enabled) {
+        return {
+          ...entry,
+          advancedProfileEnabled: false
+        };
+      }
+
+      const segments = entry.profileSegments?.length
+        ? entry.profileSegments
+        : [createDefaultGlassProfileSegment(entry)];
+      return {
+        ...entry,
+        advancedProfileEnabled: true,
+        profileSegments: segments
+      };
+    });
+  };
+
+  const addProfileSegment = (glassId: string) => {
+    updateTypedItem(glassId, "glass", (entry) => {
+      const current = entry.profileSegments ?? [];
+      const fallbackDiameter = current[current.length - 1]?.diameterMm ?? entry.diameterMm;
+      const segment: GlassProfileSegment = {
+        id: createId("seg"),
+        name: `Segment ${current.length + 1}`,
+        diameterMm: Number(Math.max(1, fallbackDiameter).toFixed(2)),
+        depthMm: 1
+      };
+      return {
+        ...entry,
+        profileSegments: [...current, segment]
+      };
+    });
+  };
+
+  const updateProfileSegment = (
+    glassId: string,
+    segmentId: string,
+    updater: (segment: GlassProfileSegment) => GlassProfileSegment
+  ) => {
+    updateTypedItem(glassId, "glass", (entry) => ({
+      ...entry,
+      profileSegments: (entry.profileSegments ?? []).map((segment) =>
+        segment.id === segmentId ? updater(segment) : segment
+      )
+    }));
+  };
+
+  const removeProfileSegment = (glassId: string, segmentId: string) => {
+    updateTypedItem(glassId, "glass", (entry) => {
+      const segments = (entry.profileSegments ?? []).filter((segment) => segment.id !== segmentId);
+      return {
+        ...entry,
+        profileSegments: segments
+      };
+    });
+  };
+
+  const moveProfileSegment = (glassId: string, segmentId: string, direction: -1 | 1) => {
+    updateTypedItem(glassId, "glass", (entry) => {
+      const segments = [...(entry.profileSegments ?? [])];
+      const index = segments.findIndex((segment) => segment.id === segmentId);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= segments.length) return entry;
+      const [segment] = segments.splice(index, 1);
+      segments.splice(target, 0, segment);
+      return {
+        ...entry,
+        profileSegments: segments
+      };
     });
   };
 
@@ -470,6 +607,7 @@ export function StackBuilder({
                     label="Diameter (mm)"
                     value={selectedItem.diameterMm}
                     min={0}
+                    disabled={Boolean(selectedItem.advancedProfileEnabled)}
                     onChange={(event) =>
                       updateTypedItem(selectedItem.id, "glass", (entry) => ({
                         ...entry,
@@ -481,6 +619,7 @@ export function StackBuilder({
                     label="Thickness (mm)"
                     value={selectedItem.thicknessMm}
                     min={0}
+                    disabled={Boolean(selectedItem.advancedProfileEnabled)}
                     onChange={(event) =>
                       updateTypedItem(selectedItem.id, "glass", (entry) => ({
                         ...entry,
@@ -503,6 +642,149 @@ export function StackBuilder({
                     Optional. Leave empty if unknown. This is the usable optical diameter, not the physical glass
                     diameter. Used for vignetting and retaining-lip warnings.
                   </p>
+                  <label className="flex items-center gap-2 text-sm text-labMuted">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedItem.advancedProfileEnabled)}
+                      onChange={(event) => setAdvancedProfileEnabled(selectedItem.id, event.target.checked)}
+                    />
+                    Advanced Element Profile (optional)
+                  </label>
+
+                  {selectedItem.advancedProfileEnabled && (
+                    <div className="space-y-2 rounded-xl border border-labBorder bg-[#0b0b0b] p-3">
+                      <p className="text-xs leading-relaxed text-labMuted">
+                        FRONT → REAR stepped profile. <span className="text-labText">Option 1 active:</span> total
+                        profile depth auto-updates official glass thickness.
+                      </p>
+                      <div className="grid gap-1">
+                        {(selectedItem.profileSegments ?? []).map((segment, segmentIndex) => (
+                          <div
+                            key={segment.id}
+                            className="grid grid-cols-[1.1fr_0.8fr_0.8fr_auto] gap-1 rounded-lg border border-labBorder bg-[#090909] p-2"
+                          >
+                            <Input
+                              value={segment.name ?? ""}
+                              placeholder={`Segment ${segmentIndex + 1}`}
+                              onChange={(event) =>
+                                updateProfileSegment(selectedItem.id, segment.id, (entry) => ({
+                                  ...entry,
+                                  name: event.target.value
+                                }))
+                              }
+                            />
+                            <NumberInput
+                              value={segment.diameterMm}
+                              min={0}
+                              step="0.01"
+                              onChange={(event) =>
+                                updateProfileSegment(selectedItem.id, segment.id, (entry) => ({
+                                  ...entry,
+                                  diameterMm: sanitizeSegmentValue(Number(event.target.value))
+                                }))
+                              }
+                            />
+                            <NumberInput
+                              value={segment.depthMm}
+                              min={0}
+                              step="0.01"
+                              onChange={(event) =>
+                                updateProfileSegment(selectedItem.id, segment.id, (entry) => ({
+                                  ...entry,
+                                  depthMm: sanitizeSegmentValue(Number(event.target.value))
+                                }))
+                              }
+                            />
+                            <div className="flex items-center gap-1">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="h-8 w-8 p-0 text-xs"
+                                onClick={() => moveProfileSegment(selectedItem.id, segment.id, -1)}
+                                disabled={segmentIndex === 0}
+                              >
+                                ↑
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="h-8 w-8 p-0 text-xs"
+                                onClick={() => moveProfileSegment(selectedItem.id, segment.id, 1)}
+                                disabled={segmentIndex === (selectedItem.profileSegments ?? []).length - 1}
+                              >
+                                ↓
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="h-8 w-8 border-labDanger/40 p-0 text-xs text-labDanger"
+                                onClick={() => removeProfileSegment(selectedItem.id, segment.id)}
+                              >
+                                ×
+                              </Button>
+                            </div>
+                            <p className="mono col-span-4 text-[11px] text-labMuted">
+                              D {segment.diameterMm.toFixed(2)}mm · Depth {segment.depthMm.toFixed(2)}mm
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-lg border border-labBorder bg-[#090909] p-2 text-xs">
+                          <p className="text-labMuted">Total profile depth</p>
+                          <p className="mono text-labText">{selectedGlassProfileDepth.toFixed(2)} mm</p>
+                        </div>
+                        <div className="rounded-lg border border-labBorder bg-[#090909] p-2 text-xs">
+                          <p className="text-labMuted">Max diameter</p>
+                          <p className="mono text-labText">{selectedGlassProfileMaxDiameter.toFixed(2)} mm</p>
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border border-labBorder bg-[#070707] p-2">
+                        <p className="mb-1 text-[11px] uppercase tracking-[0.14em] text-labMuted">Profile Sketch</p>
+                        <svg viewBox="0 0 340 110" className="h-28 w-full">
+                          <line x1={8} y1={55} x2={332} y2={55} stroke="#1f2d3a" strokeWidth={0.8} />
+                          {(() => {
+                            const segments = selectedGlass?.profileSegments ?? [];
+                            const totalDepth = Math.max(selectedGlassProfileDepth, 0.001);
+                            const maxDiameter = Math.max(selectedGlassProfileMaxDiameter, 1);
+                            let cursor = 8;
+                            return segments.map((segment) => {
+                              const width = Math.max(16, (segment.depthMm / totalDepth) * 320);
+                              const height = Math.max(8, (segment.diameterMm / maxDiameter) * 92);
+                              const x = cursor;
+                              const y = 55 - height / 2;
+                              cursor += width;
+                              return (
+                                <g key={segment.id}>
+                                  <rect
+                                    x={x}
+                                    y={y}
+                                    width={width}
+                                    height={height}
+                                    fill="#102840"
+                                    stroke="#4aa3ff"
+                                    strokeWidth={1}
+                                    rx={2}
+                                  />
+                                </g>
+                              );
+                            });
+                          })()}
+                        </svg>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <Button type="button" variant="ghost" onClick={() => addProfileSegment(selectedItem.id)}>
+                          Add Segment
+                        </Button>
+                        <span className="text-xs text-labMuted">
+                          Auto-sync thickness: <span className="mono">{selectedItem.thicknessMm.toFixed(2)}mm</span>
+                        </span>
+                      </div>
+                    </div>
+                  )}
                   <label className="flex items-center gap-2 text-sm text-labMuted">
                     <input
                       type="checkbox"

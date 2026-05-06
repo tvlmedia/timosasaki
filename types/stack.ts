@@ -39,10 +39,19 @@ export type BaseStackItem = {
   notes?: string;
 };
 
+export type GlassProfileSegment = {
+  id: string;
+  name?: string;
+  diameterMm: number;
+  depthMm: number;
+};
+
 export type GlassItem = BaseStackItem & {
   type: "glass";
   diameterMm: number;
   thicknessMm: number;
+  advancedProfileEnabled?: boolean;
+  profileSegments?: GlassProfileSegment[];
   edgeThicknessMm?: number;
   clearApertureMm?: number;
   flipped: boolean;

@@ -27,7 +27,13 @@ function formatMm(value: number | undefined): string | null {
 function getQuickSpecs(item: StackItem): string {
   switch (item.type) {
     case "glass":
-      return [`D ${formatMm(item.diameterMm)}`, `T ${formatMm(item.thicknessMm)}`].filter(Boolean).join("  ·  ");
+      return [
+        `D ${formatMm(item.diameterMm)}`,
+        `T ${formatMm(item.thicknessMm)}`,
+        item.advancedProfileEnabled ? `Seg ${(item.profileSegments ?? []).length}` : undefined
+      ]
+        .filter(Boolean)
+        .join("  ·  ");
     case "spacer":
       return [
         `ID ${formatMm(item.innerDiameterMm)}`,

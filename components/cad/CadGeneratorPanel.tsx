@@ -40,12 +40,22 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
   switch (partType) {
     case "element_cup": {
       const glass = source?.type === "glass" ? source : undefined;
+      const profileSegments = glass?.advancedProfileEnabled
+        ? (glass.profileSegments ?? []).filter(
+            (segment) => segment.diameterMm > 0 && segment.depthMm > 0
+          )
+        : [];
+      const profileDepth =
+        profileSegments.length > 0
+          ? profileSegments.reduce((sum, segment) => sum + segment.depthMm, 0)
+          : undefined;
       return {
         type: "element_cup",
         params: {
           partName,
           glassDiameterMm: glass?.diameterMm ?? defaults.defaultInnerDiameterMm - 4,
-          glassThicknessMm: glass?.thicknessMm ?? defaults.partThicknessMm,
+          glassThicknessMm: profileDepth ?? glass?.thicknessMm ?? defaults.partThicknessMm,
+          profileSegments: profileSegments.length ? profileSegments : undefined,
           seatClearanceMm: defaults.printToleranceMm,
           wallThicknessMm: defaults.wallThicknessMm,
           retainingLipMm: defaults.retainingLipMm,
@@ -230,6 +240,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.glass_thickness = `${pretty(payload.params.glassThicknessMm)} mm`;
       values.seat_clearance = `${pretty(payload.params.seatClearanceMm)} mm`;
       values.wall_thickness = `${pretty(payload.params.wallThicknessMm)} mm`;
+      values.profile_segments = payload.params.profileSegments?.length ?? 0;
       return values;
     }
 
