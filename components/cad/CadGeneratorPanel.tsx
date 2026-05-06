@@ -32,6 +32,28 @@ function toMmToken(value: number): string {
   return value.toFixed(1).replace(".", "_");
 }
 
+function toPositive(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
+  return value;
+}
+
+function getNearestBarrelInnerDiameter(items: StackItem[], source?: StackItem): number | undefined {
+  const barrels = items.filter(
+    (item): item is Extract<StackItem, { type: "barrel" }> =>
+      item.type === "barrel" && toPositive(item.innerDiameterMm) > 0
+  );
+  if (!barrels.length) return undefined;
+  if (!source) return barrels[0].innerDiameterMm;
+
+  const sourceIndex = source.positionIndex;
+  const nearest = barrels.reduce((best, current) => {
+    const bestDistance = Math.abs(best.positionIndex - sourceIndex);
+    const currentDistance = Math.abs(current.positionIndex - sourceIndex);
+    return currentDistance < bestDistance ? current : best;
+  });
+  return nearest.innerDiameterMm;
+}
+
 function createPayload(project: LensProject, partType: CadPartType, source?: StackItem): ScadPayload {
   const defaults = project.cadDefaults;
   const sourceName = source?.name ?? "part";
@@ -49,15 +71,35 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
         profileSegments.length > 0
           ? profileSegments.reduce((sum, segment) => sum + segment.depthMm, 0)
           : undefined;
+      const glassDiameterMm = glass?.diameterMm ?? defaults.defaultInnerDiameterMm - 4;
+      const seatClearanceMm = defaults.printToleranceMm;
+      const seatDiameterMm = glassDiameterMm + seatClearanceMm;
+      const minimumOuterFromSeat = seatDiameterMm + Math.max(defaults.wallThicknessMm * 2, 1.6);
+      const nearestBarrelInner = getNearestBarrelInnerDiameter(project.stackItems, source);
+      const fitClearancePerSide = Math.max(defaults.radialClearanceMm + defaults.printToleranceMm, 0.25);
+      const barrelFitOuter =
+        nearestBarrelInner && nearestBarrelInner > 0
+          ? nearestBarrelInner - fitClearancePerSide * 2
+          : undefined;
+      const resolvedOuterDiameter = Math.max(
+        minimumOuterFromSeat,
+        barrelFitOuter ?? minimumOuterFromSeat
+      );
+      const resolvedWallThickness = Math.max(
+        defaults.wallThicknessMm,
+        (resolvedOuterDiameter - seatDiameterMm) / 2
+      );
+
       return {
         type: "element_cup",
         params: {
           partName,
-          glassDiameterMm: glass?.diameterMm ?? defaults.defaultInnerDiameterMm - 4,
+          glassDiameterMm,
           glassThicknessMm: profileDepth ?? glass?.thicknessMm ?? defaults.partThicknessMm,
           profileSegments: profileSegments.length ? profileSegments : undefined,
-          seatClearanceMm: defaults.printToleranceMm,
-          wallThicknessMm: defaults.wallThicknessMm,
+          seatClearanceMm,
+          wallThicknessMm: Number(resolvedWallThickness.toFixed(3)),
+          outerDiameterMm: Number(resolvedOuterDiameter.toFixed(3)),
           retainingLipMm: defaults.retainingLipMm,
           rearLipMm: defaults.retainingLipMm,
           facets: defaults.facets
@@ -240,6 +282,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.glass_thickness = `${pretty(payload.params.glassThicknessMm)} mm`;
       values.seat_clearance = `${pretty(payload.params.seatClearanceMm)} mm`;
       values.wall_thickness = `${pretty(payload.params.wallThicknessMm)} mm`;
+      values.outer_diameter = `${pretty(payload.params.outerDiameterMm ?? 0)} mm`;
       values.profile_segments = payload.params.profileSegments?.length ?? 0;
       return values;
     }
