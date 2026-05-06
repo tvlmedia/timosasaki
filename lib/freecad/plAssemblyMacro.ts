@@ -228,5 +228,5 @@ doc.recompute()
 `;
 }
 
-# Backward-compatible alias name used by earlier code.
+// Backward-compatible alias name used by earlier code.
 export const generatePlAssemblyFreecadMacro = generateSlidingFocusAssemblyFreecadMacro;
