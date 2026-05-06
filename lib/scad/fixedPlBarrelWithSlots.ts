@@ -15,10 +15,31 @@ export function generateFixedPlBarrelWithSlotsScad(params: FixedPLBarrelWithSlot
     params.stepUpStartFromPLFlangeMm + params.mainBarrelLengthMm,
     params.rearNeckLengthMm
   );
+  const includePlReferenceMount = params.includePlReferenceMount ?? true;
+  const useImportedPlReferenceStl = params.useImportedPlReferenceStl ?? false;
+  const plReferenceStlPath = params.plReferenceStlPath ?? "cad/reference/PL_Lens_Tail.stl";
+  const plReferenceMountThickness = Math.max(
+    params.plReferenceMountThicknessMm ?? params.plLockingClearanceLengthMm,
+    2
+  );
+  const plReferenceMountOuterDiameter = Math.max(
+    params.plReferenceMountOuterDiameterMm ??
+      Math.max(
+        (params.plLockingClearanceDiameterMm ?? 0) > 0 ? (params.plLockingClearanceDiameterMm ?? 0) + 6 : 0,
+        params.rearNeckOuterDiameterMm + 8
+      ),
+    params.rearNeckOuterDiameterMm + 2
+  );
+  const plReferenceMountInnerDiameter = Math.max(
+    params.plReferenceMountInnerDiameterMm ?? params.rearNeckInnerDiameterMm,
+    1
+  );
 
   return `${scadHeader(params.partName, params.facets)}
 // Sliding prototype focus (axial slots, no cam/helicoid)
 // Z=0 at PL flange plane, +Z toward front.
+// OpenSCAD cannot directly import STEP. For real PL geometry in OpenSCAD:
+// convert PL_Lens_Tail.STEP -> PL_Lens_Tail.stl and set use_imported_pl_reference_stl = true.
 
 inner_diameter = ${n(params.innerDiameterMm)};
 outer_diameter = ${n(params.outerDiameterMm)};
@@ -45,6 +66,14 @@ wall_thickness = ${n(wallThickness)};
 
 pin_diameter = ${n(params.pinDiameterMm)};
 pin_clearance = ${n(params.pinClearanceMm)};
+
+include_pl_reference_mount = ${includePlReferenceMount ? "true" : "false"};
+use_imported_pl_reference_stl = ${useImportedPlReferenceStl ? "true" : "false"};
+pl_reference_stl_path = "${plReferenceStlPath}";
+pl_reference_mount_thickness = ${n(plReferenceMountThickness)};
+pl_reference_mount_outer_diameter = ${n(plReferenceMountOuterDiameter)};
+pl_reference_mount_inner_diameter = ${n(plReferenceMountInnerDiameter)};
+pl_reference_mount_z = ${n(-plReferenceMountThickness)};
 
 module neck_section() {
   difference() {
@@ -83,9 +112,38 @@ module axial_guide_slots() {
   }
 }
 
-difference() {
-  barrel_body();
-  axial_guide_slots();
+module fixed_barrel_with_slots() {
+  difference() {
+    barrel_body();
+    axial_guide_slots();
+  }
+}
+
+module pl_mount_reference_placeholder() {
+  difference() {
+    translate([0, 0, pl_reference_mount_z])
+      cylinder(h = pl_reference_mount_thickness, d = pl_reference_mount_outer_diameter);
+    translate([0, 0, pl_reference_mount_z - 0.1])
+      cylinder(h = pl_reference_mount_thickness + 0.2, d = pl_reference_mount_inner_diameter);
+  }
+}
+
+module pl_mount_reference() {
+  if (use_imported_pl_reference_stl) {
+    // STL path is editable in generated code.
+    // Keep this import as a reference body; align/rotate in CAD as needed.
+    translate([0, 0, pl_reference_mount_z])
+      import(pl_reference_stl_path);
+  } else {
+    pl_mount_reference_placeholder();
+  }
+}
+
+union() {
+  fixed_barrel_with_slots();
+  if (include_pl_reference_mount) {
+    pl_mount_reference();
+  }
 }
 
 // TODO (future): cam/helicoid focus system.

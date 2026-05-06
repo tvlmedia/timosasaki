@@ -317,6 +317,10 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
         estimateMainBarrelLengthMm(project, source)
       );
       const totalLength = Number((stepUpStart + mainBarrelLength).toFixed(3));
+      const plReferenceStlPath = (defaults.plStepReferencePath ?? "cad/reference/PL_Lens_Tail.STEP").replace(
+        /\.step$/i,
+        ".stl"
+      );
       return {
         type: "fixed_pl_barrel_with_slots",
         params: {
@@ -340,6 +344,15 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
           slotStartZMm: plSlotStartZ,
           pinDiameterMm: pinDiameter,
           pinClearanceMm: pinClearance,
+          includePlReferenceMount: true,
+          useImportedPlReferenceStl: false,
+          plReferenceStlPath,
+          plReferenceMountThicknessMm: plLockClearanceLength,
+          plReferenceMountOuterDiameterMm: Math.max(
+            plLockClearanceDiameter > 0 ? plLockClearanceDiameter + 6 : 0,
+            plRearNeckOuter + 8
+          ),
+          plReferenceMountInnerDiameterMm: plRearNeckInner,
           facets: defaults.facets
         }
       };
@@ -623,6 +636,9 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.slot_length = `${pretty(payload.params.slotLengthMm)} mm`;
       values.pin_diameter = `${pretty(payload.params.pinDiameterMm)} mm`;
       values.pin_clearance = `${pretty(payload.params.pinClearanceMm)} mm`;
+      values.pl_reference_mount = payload.params.includePlReferenceMount ? "enabled" : "disabled";
+      values.use_imported_pl_stl = Boolean(payload.params.useImportedPlReferenceStl);
+      values.pl_reference_stl_path = payload.params.plReferenceStlPath ?? "cad/reference/PL_Lens_Tail.stl";
       return values;
     }
 

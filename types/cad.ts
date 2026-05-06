@@ -165,6 +165,12 @@ export type FixedPLBarrelWithSlotsParams = {
   slotCenterRadiusMm?: number;
   pinDiameterMm: number;
   pinClearanceMm: number;
+  includePlReferenceMount?: boolean;
+  useImportedPlReferenceStl?: boolean;
+  plReferenceStlPath?: string;
+  plReferenceMountThicknessMm?: number;
+  plReferenceMountOuterDiameterMm?: number;
+  plReferenceMountInnerDiameterMm?: number;
   facets: number;
 };
 
