@@ -1,4 +1,4 @@
-import type { CadDefaults, LensProject, TargetLook } from "@/types";
+import type { CadDefaults, LensProject, MeasurementsState, TargetLook } from "@/types";
 
 export const defaultCadDefaults: CadDefaults = {
   printToleranceMm: 0.18,
@@ -25,6 +25,13 @@ export const defaultTargetLook: TargetLook = {
   caControl: 5,
   facesOnThirdsUsable: 5
 };
+
+export function createEmptyMeasurementsState(nowIso = new Date().toISOString()): MeasurementsState {
+  return {
+    annotations: [],
+    updatedAt: nowIso
+  };
+}
 
 export function createDemoProject(): LensProject {
   const now = new Date().toISOString();
@@ -53,6 +60,7 @@ export function createDemoProject(): LensProject {
     cadDefaults: { ...defaultCadDefaults },
     createdAt: now,
     updatedAt: now,
+    measurements: createEmptyMeasurementsState(now),
     stackItems: [
       {
         id: "e1",

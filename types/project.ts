@@ -1,5 +1,6 @@
 import type { CadDefaults } from "@/types/cad";
 import type { Experiment } from "@/types/experiment";
+import type { MeasurementsState } from "@/types/measurement";
 import type { StackItem } from "@/types/stack";
 
 export type TargetLook = {
@@ -29,5 +30,6 @@ export type LensProject = {
   updatedAt: string;
   stackItems: StackItem[];
   experiments: Experiment[];
+  measurements: MeasurementsState;
   cadDefaults: CadDefaults;
 };

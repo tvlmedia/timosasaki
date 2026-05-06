@@ -4,12 +4,12 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/common/Button";
-import { StackBuilder } from "@/components/stack/StackBuilder";
-import { projectDetailHref, projectMeasurementsHref } from "@/lib/routes";
+import { MeasurementsBoard } from "@/components/measurements/MeasurementsBoard";
+import { projectDetailHref } from "@/lib/routes";
 import { exportProjectJson, getProject, saveProject } from "@/lib/storage";
 import type { LensProject } from "@/types";
 
-export default function StackPage() {
+export default function MeasurementsPage() {
   const [project, setProject] = useState<LensProject | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -26,7 +26,7 @@ export default function StackPage() {
 
   if (loading) {
     return (
-      <AppShell title="Stack Builder">
+      <AppShell title="Measurements">
         <div className="panel p-4">
           <p className="text-labMuted">Loading project...</p>
         </div>
@@ -36,7 +36,7 @@ export default function StackPage() {
 
   if (!project) {
     return (
-      <AppShell title="Stack Builder">
+      <AppShell title="Measurements">
         <div className="panel p-4">
           <p className="text-labMuted">Project not found.</p>
         </div>
@@ -46,24 +46,21 @@ export default function StackPage() {
 
   return (
     <AppShell
-      title="Stack Builder"
+      title="Measurements"
       projectName={project.name}
       actions={
         <>
           <Link href={projectDetailHref(project.id)}>
             <Button>Project</Button>
           </Link>
-          <Link href={projectMeasurementsHref(project.id)}>
-            <Button>Measurements</Button>
-          </Link>
           <Button onClick={() => exportProjectJson(project)}>Export JSON</Button>
         </>
       }
     >
-      <StackBuilder
+      <MeasurementsBoard
         project={project}
-        onProjectChange={(next) => {
-          const saved = saveProject(next);
+        onProjectChange={(nextProject) => {
+          const saved = saveProject(nextProject);
           setProject(saved);
         }}
       />

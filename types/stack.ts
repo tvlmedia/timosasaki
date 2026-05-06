@@ -1,3 +1,11 @@
+import type {
+  ElementOverallType,
+  ElementOrientation,
+  OpticalPowerGuess,
+  StepDirection,
+  SurfaceShape
+} from "@/types/measurement";
+
 export type StackItemType =
   | "glass"
   | "spacer"
@@ -38,7 +46,23 @@ export type GlassItem = BaseStackItem & {
   edgeThicknessMm?: number;
   clearApertureMm?: number;
   flipped: boolean;
+  elementId?: string;
+  role?: string;
+  elementOverallType?: ElementOverallType;
+  frontSurfaceShape?: SurfaceShape;
+  rearSurfaceShape?: SurfaceShape;
+  opticalPowerGuess?: OpticalPowerGuess;
+  orientation?: ElementOrientation;
+  frontSideDescription?: string;
+  rearSideDescription?: string;
   coatingColor?: string;
+  condition?: string;
+  hasSteppedProfile?: boolean;
+  largeDiameterMm?: number;
+  smallDiameterMm?: number;
+  largeSectionThicknessMm?: number;
+  smallSectionThicknessMm?: number;
+  stepDirection?: StepDirection;
   glassUnknown?: boolean;
   movesWithFocus?: boolean;
   decenterMm?: number;

@@ -6,7 +6,12 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/common/Button";
 import { Input } from "@/components/common/Input";
 import { TargetLookRadar } from "@/components/projects/TargetLookRadar";
-import { projectCadHref, projectExperimentsHref, projectStackHref } from "@/lib/routes";
+import {
+  projectCadHref,
+  projectExperimentsHref,
+  projectMeasurementsHref,
+  projectStackHref
+} from "@/lib/routes";
 import {
   getLargestGlassDiameter,
   getRecommendedBarrelInnerDiameter,
@@ -145,6 +150,9 @@ export default function ProjectDetailPage() {
             </Link>
             <Link href={projectExperimentsHref(project.id)} className="inline-flex">
               <Button className="w-full">Add Experiment</Button>
+            </Link>
+            <Link href={projectMeasurementsHref(project.id)} className="inline-flex">
+              <Button className="w-full">Measurements</Button>
             </Link>
             <Button onClick={() => exportProjectJson(project)}>Export JSON</Button>
           </div>

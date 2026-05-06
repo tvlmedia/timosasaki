@@ -19,3 +19,7 @@ export function projectCadHref(projectId: string): string {
 export function projectExperimentsHref(projectId: string): string {
   return `/projects/${STATIC_PROJECT_ROUTE_ID}/experiments?projectId=${q(projectId)}`;
 }
+
+export function projectMeasurementsHref(projectId: string): string {
+  return `/projects/${STATIC_PROJECT_ROUTE_ID}/measurements?projectId=${q(projectId)}`;
+}

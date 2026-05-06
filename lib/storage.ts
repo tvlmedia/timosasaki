@@ -1,6 +1,6 @@
-import { createDemoProject, defaultCadDefaults, defaultTargetLook } from "@/lib/defaults";
+import { createDemoProject, createEmptyMeasurementsState, defaultCadDefaults, defaultTargetLook } from "@/lib/defaults";
 import { createId, safeFileName } from "@/lib/ids";
-import type { CadDefaults, LensProject } from "@/types";
+import type { CadDefaults, LensProject, MeasurementsState } from "@/types";
 
 const STORAGE_KEY = "sasaki-lens-lab-projects-v1";
 const SETTINGS_KEY = "sasaki-lens-lab-settings-v1";
@@ -38,6 +38,9 @@ function isLensProjectCandidate(value: unknown): value is LensProject {
 }
 
 export function normalizeProject(project: LensProject): LensProject {
+  const now = new Date().toISOString();
+  const normalizedMeasurements = normalizeMeasurements(project.measurements, now);
+
   return {
     ...project,
     notes: project.notes ?? "",
@@ -50,8 +53,34 @@ export function normalizeProject(project: LensProject): LensProject {
       .map((item, index) => ({ ...item, positionIndex: index }))
       .sort((a, b) => a.positionIndex - b.positionIndex),
     experiments: project.experiments ?? [],
-    createdAt: project.createdAt ?? new Date().toISOString(),
-    updatedAt: project.updatedAt ?? new Date().toISOString()
+    measurements: normalizedMeasurements,
+    createdAt: project.createdAt ?? now,
+    updatedAt: project.updatedAt ?? now
+  };
+}
+
+function normalizeMeasurements(
+  measurements: MeasurementsState | undefined,
+  nowIso: string
+): MeasurementsState {
+  const base = createEmptyMeasurementsState(nowIso);
+  if (!measurements) return base;
+  return {
+    ...base,
+    ...measurements,
+    annotations: (measurements.annotations ?? []).map((annotation) => ({
+      ...annotation,
+      label: annotation.label ?? "Annotation",
+      itemType: annotation.itemType ?? "glass",
+      x: Number.isFinite(annotation.x) ? annotation.x : 0.1,
+      y: Number.isFinite(annotation.y) ? annotation.y : 0.1,
+      width: Number.isFinite(annotation.width) ? annotation.width : 0.2,
+      height: Number.isFinite(annotation.height) ? annotation.height : 0.2,
+      fields: annotation.fields ?? {},
+      createdAt: annotation.createdAt ?? nowIso,
+      updatedAt: annotation.updatedAt ?? nowIso
+    })),
+    updatedAt: measurements.updatedAt ?? nowIso
   };
 }
 
@@ -107,22 +136,48 @@ export function duplicateProject(id: string): LensProject | undefined {
   if (!project) return undefined;
 
   const now = new Date().toISOString();
+  const stackIdMap = new Map<string, string>();
+  const duplicatedStackItems = project.stackItems.map((item, index) => {
+    const newId = createId(item.type);
+    stackIdMap.set(item.id, newId);
+    return {
+      ...item,
+      id: newId,
+      positionIndex: index
+    };
+  });
   const duplicated = normalizeProject({
     ...project,
     id: createId("project"),
     name: `${project.name} Copy`,
     createdAt: now,
     updatedAt: now,
-    stackItems: project.stackItems.map((item, index) => ({
-      ...item,
-      id: createId(item.type),
-      positionIndex: index
-    })),
+    stackItems: duplicatedStackItems,
     experiments: project.experiments.map((experiment) => ({
       ...experiment,
       id: createId("experiment"),
       images: experiment.images.map((image) => ({ ...image, id: createId("image") }))
-    }))
+    })),
+    measurements: {
+      ...project.measurements,
+      annotations: project.measurements.annotations.map((annotation) => ({
+        ...annotation,
+        id: createId("measure"),
+        linkedStackItemId: annotation.linkedStackItemId
+          ? stackIdMap.get(annotation.linkedStackItemId)
+          : undefined,
+        createdAt: now,
+        updatedAt: now
+      })),
+      calibration: project.measurements.calibration
+        ? {
+            ...project.measurements.calibration,
+            id: createId("cal"),
+            createdAt: now
+          }
+        : undefined,
+      updatedAt: now
+    }
   });
 
   const projects = getProjects();
@@ -191,6 +246,7 @@ export function createEmptyProject(name: string): LensProject {
     updatedAt: now,
     stackItems: [],
     experiments: [],
+    measurements: createEmptyMeasurementsState(now),
     cadDefaults: getGlobalCadDefaults()
   };
 }
