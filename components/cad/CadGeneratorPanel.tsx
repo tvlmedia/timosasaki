@@ -24,6 +24,8 @@ const needsSource: Record<CadPartType, StackItem["type"] | null> = {
   iris_disk: "iris",
   diffusion_holder: "diffusion",
   retaining_ring: "retaining_ring",
+  fixed_pl_barrel_with_slots: null,
+  sliding_optical_carrier: null,
   main_barrel: "barrel",
   moving_carrier: "barrel",
   cam_sleeve: "barrel"
@@ -194,6 +196,45 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
           notchCount: ring?.notchCount ?? 2,
           notchWidthMm: 2,
           notchDepthMm: 1.5,
+          facets: defaults.facets
+        }
+      };
+    }
+    case "fixed_pl_barrel_with_slots": {
+      const inner = getRecommendedBarrelInnerDiameter(project.stackItems, defaults);
+      const outer = Math.max(inner + defaults.wallThicknessMm * 2, defaults.defaultOuterDiameterMm);
+      const mainBarrelLength = estimateMainBarrelLengthMm(project, source);
+      return {
+        type: "main_barrel",
+        params: {
+          partName,
+          innerDiameterMm: inner,
+          outerDiameterMm: outer,
+          lengthMm: mainBarrelLength,
+          hasIrisSlot: false,
+          hasDiffusionSlot: false,
+          slotWidthMm: 4,
+          slotLengthMm: 14,
+          screwHoleCount: 0,
+          screwDiameterMm: defaults.screwDiameterMm,
+          facets: defaults.facets
+        }
+      };
+    }
+    case "sliding_optical_carrier": {
+      const inner = Math.max(getRecommendedBarrelInnerDiameter(project.stackItems, defaults) - 2, 20);
+      const outer = Math.max(inner + defaults.wallThicknessMm, inner + 1.5);
+      const mainBarrelLength = estimateMainBarrelLengthMm(project, source);
+      const carrierLength = Number(Math.max(18, Math.min(mainBarrelLength * 0.45, 42)).toFixed(1));
+      return {
+        type: "moving_carrier",
+        params: {
+          partName,
+          innerDiameterMm: inner,
+          outerDiameterMm: outer,
+          lengthMm: carrierLength,
+          camPinDiameterMm: defaults.camPinDiameterMm,
+          antiRotationKeyEnabled: true,
           facets: defaults.facets
         }
       };
