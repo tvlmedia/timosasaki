@@ -6,7 +6,12 @@ import { PartSpecCard } from "@/components/cad/PartSpecCard";
 import { ScadCodeViewer } from "@/components/cad/ScadCodeViewer";
 import { Select } from "@/components/common/Select";
 import { WarningBox } from "@/components/common/WarningBox";
-import { getPartWarnings, getRecommendedBarrelInnerDiameter, getRecommendedBarrelOuterDiameter } from "@/lib/calculations";
+import {
+  getPartWarnings,
+  getRecommendedBarrelInnerDiameter,
+  getRecommendedBarrelOuterDiameter,
+  getTotalStackLength
+} from "@/lib/calculations";
 import { generateFreecadMacro, type FreecadPayload } from "@/lib/freecad";
 import { safeFileName } from "@/lib/ids";
 import { generateScad, type ScadPayload } from "@/lib/scad";
@@ -52,6 +57,20 @@ function getNearestBarrelInnerDiameter(items: StackItem[], source?: StackItem): 
     return currentDistance < bestDistance ? current : best;
   });
   return nearest.innerDiameterMm;
+}
+
+function estimateMainBarrelLengthMm(project: LensProject, source?: StackItem): number {
+  const sourceBarrel = source?.type === "barrel" ? source : undefined;
+  if (sourceBarrel && sourceBarrel.lengthMm > 0) {
+    return sourceBarrel.lengthMm;
+  }
+
+  const stackLength = getTotalStackLength(project.stackItems);
+  if (stackLength <= 0) return 48;
+
+  const frontRearAllowance = Math.max(project.cadDefaults.partThicknessMm * 2, 8);
+  const estimated = stackLength + frontRearAllowance;
+  return Number(Math.max(36, Math.min(estimated, 120)).toFixed(1));
 }
 
 function createPayload(project: LensProject, partType: CadPartType, source?: StackItem): ScadPayload {
@@ -183,13 +202,14 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
       const barrel = source?.type === "barrel" ? source : undefined;
       const inner = barrel?.innerDiameterMm ?? getRecommendedBarrelInnerDiameter(project.stackItems, defaults);
       const outer = barrel?.outerDiameterMm ?? Math.max(inner + defaults.wallThicknessMm * 2, defaults.defaultOuterDiameterMm);
+      const mainBarrelLength = estimateMainBarrelLengthMm(project, source);
       return {
         type: "main_barrel",
         params: {
           partName,
           innerDiameterMm: inner,
           outerDiameterMm: outer,
-          lengthMm: barrel?.lengthMm ?? 80,
+          lengthMm: mainBarrelLength,
           hasIrisSlot: Boolean(barrel?.hasIrisSlot),
           hasDiffusionSlot: Boolean(barrel?.hasDiffusionSlot),
           slotWidthMm: 4,
@@ -202,15 +222,17 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
     }
     case "moving_carrier": {
       const barrel = source?.type === "barrel" ? source : undefined;
+      const mainBarrelLength = estimateMainBarrelLengthMm(project, source);
       const inner = barrel?.innerDiameterMm ?? getRecommendedBarrelInnerDiameter(project.stackItems, defaults) - 1;
       const outer = barrel?.outerDiameterMm ?? getRecommendedBarrelOuterDiameter(project.stackItems, defaults) - 0.5;
+      const carrierLength = Number(Math.max(18, Math.min(mainBarrelLength * 0.45, 42)).toFixed(1));
       return {
         type: "moving_carrier",
         params: {
           partName,
           innerDiameterMm: inner,
           outerDiameterMm: Math.max(outer, inner + defaults.wallThicknessMm),
-          lengthMm: 28,
+          lengthMm: carrierLength,
           camPinDiameterMm: defaults.camPinDiameterMm,
           antiRotationKeyEnabled: true,
           facets: defaults.facets
@@ -219,14 +241,16 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
     }
     case "cam_sleeve": {
       const barrel = source?.type === "barrel" ? source : undefined;
+      const mainBarrelLength = estimateMainBarrelLengthMm(project, source);
       const inner = barrel?.outerDiameterMm ?? getRecommendedBarrelOuterDiameter(project.stackItems, defaults) + 0.5;
+      const camSleeveLength = Number(Math.max(30, Math.min(mainBarrelLength * 0.8, 60)).toFixed(1));
       return {
         type: "cam_sleeve",
         params: {
           partName,
           innerDiameterMm: inner,
           outerDiameterMm: inner + defaults.wallThicknessMm * 2,
-          lengthMm: barrel?.lengthMm ?? 48,
+          lengthMm: barrel?.lengthMm ?? camSleeveLength,
           rotationDegrees: 90,
           axialTravelMm: 8,
           slotWidthMm: defaults.camPinDiameterMm + defaults.camSlotClearanceMm,
