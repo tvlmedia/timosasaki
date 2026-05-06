@@ -348,7 +348,7 @@ export function StackBuilder({
                     }
                   />
                   <NumberInput
-                    label="Clear aperture (mm)"
+                    label="Clear aperture / usable optical diameter (mm)"
                     value={selectedItem.clearApertureMm ?? ""}
                     min={0}
                     onChange={(event) =>
@@ -358,6 +358,10 @@ export function StackBuilder({
                       }))
                     }
                   />
+                  <p className="text-xs leading-relaxed text-labMuted">
+                    Optional. Leave empty if unknown. This is the usable optical diameter, not the physical glass
+                    diameter. Used for vignetting and retaining-lip warnings.
+                  </p>
                   <label className="flex items-center gap-2 text-sm text-labMuted">
                     <input
                       type="checkbox"

@@ -13,7 +13,12 @@ function sorted(items: StackItem[]): StackItem[] {
 
 function getNeighboringGlassClearAperture(item?: StackItem): number {
   if (!item || item.type !== "glass") return 0;
-  return toPositive(item.clearApertureMm ?? item.diameterMm);
+  const explicitClearAperture = toPositive(item.clearApertureMm);
+  if (explicitClearAperture > 0) return explicitClearAperture;
+
+  // Warnings-only fallback when clear aperture is unknown:
+  // assume usable optical diameter is glass diameter minus 2.0mm.
+  return toPositive(item.diameterMm - 2.0);
 }
 
 export function getItemAxialLength(item: StackItem): number {
