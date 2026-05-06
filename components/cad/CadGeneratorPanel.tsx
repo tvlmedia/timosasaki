@@ -528,12 +528,19 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
         ? generateFreecadMacro(freecadPayload)
         : "# FreeCAD macro export is available for element cups, spacer rings, fixed PL barrel with slots, and sliding optical carrier."
       : generateScad(payload);
-  const exportModeWarnings =
-    exportMode === "freecad_macro" && !freecadPayload
+  const exportModeWarnings = [
+    ...(exportMode === "freecad_macro" && !freecadPayload
       ? [
           "FreeCAD macro export is available for element cups, spacer rings, fixed PL barrel with slots, and sliding optical carrier."
         ]
-      : [];
+      : []),
+    ...(exportMode === "openscad" && payload.type === "fixed_pl_barrel_with_slots"
+      ? [
+          "OpenSCAD export does not include the real PL STEP mount geometry.",
+          "For a real PL mount + barrel assembly, switch to FreeCAD Macro export and run the generated .FCMacro with your PL Lens Tail.STEP file."
+        ]
+      : [])
+  ];
   const partWarnings = sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : [];
 
   const specs = useMemo(() => {
@@ -693,7 +700,11 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
           onChange={(event) => setExportMode(event.target.value as "openscad" | "freecad_macro")}
         >
           <option value="openscad">OpenSCAD (.scad)</option>
-          <option value="freecad_macro">FreeCAD Macro (.FCMacro)</option>
+          <option value="freecad_macro">
+            {partType === "fixed_pl_barrel_with_slots"
+              ? "FreeCAD Assembly Macro with PL STEP (.FCMacro)"
+              : "FreeCAD Macro (.FCMacro)"}
+          </option>
         </Select>
       </div>
 
