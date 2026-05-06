@@ -3,7 +3,7 @@ export function n(value: number): string {
 }
 
 export function scadHeader(partName: string, facets: number): string {
-  return `// Sasaki Lens Lab generated prototype CAD
+  return `// Timo Sasaki Lens Lab generated prototype CAD
 // Part: ${partName}
 // WARNING: Prototype geometry only. Check tolerances and dimensions before printing/machining.
 

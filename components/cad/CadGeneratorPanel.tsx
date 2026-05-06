@@ -285,7 +285,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
 
   const onDownload = () => {
     const partLabel = safeFileName(payload.params.partName);
-    const filename = `sasaki_lens_lab_${safeFileName(project.name)}_${partLabel}.scad`;
+    const filename = `timo_sasaki_lens_lab_${safeFileName(project.name)}_${partLabel}.scad`;
     downloadTextFile(filename, code);
   };
 

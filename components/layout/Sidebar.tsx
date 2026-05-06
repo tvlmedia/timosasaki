@@ -15,7 +15,7 @@ export function Sidebar() {
   return (
     <aside className="flex h-screen w-64 flex-col border-r border-labBorder bg-[#080808] p-5">
       <div className="mb-8">
-        <h1 className="text-lg font-semibold tracking-wide text-labText">Sasaki Lens Lab</h1>
+        <h1 className="text-lg font-semibold tracking-wide text-labText">Timo Sasaki Lens Lab</h1>
         <p className="mt-1 text-xs uppercase tracking-[0.2em] text-labMuted">Prototype. Print. Test. Tune.</p>
       </div>
 

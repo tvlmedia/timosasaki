@@ -40,7 +40,7 @@ export default function DashboardPage() {
 
   return (
     <AppShell
-      title="Sasaki Lens Lab"
+      title="Timo Sasaki Lens Lab"
       actions={
         <>
           <Button variant="primary" onClick={() => setShowNewForm((prev) => !prev)}>

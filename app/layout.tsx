@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "@/app/globals.css";
 
 export const metadata: Metadata = {
-  title: "Sasaki Lens Lab",
+  title: "Timo Sasaki Lens Lab",
   description: "Prototype. Print. Test. Tune."
 };
 
