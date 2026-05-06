@@ -13,7 +13,6 @@ import {
   getRecommendedBarrelOuterDiameter,
   getTotalStackLength
 } from "@/lib/calculations";
-import { calculateFocusTravel, normalizeFocusTravelSetup } from "@/lib/focusTravel";
 import { generateFreecadMacro, type FreecadPayload } from "@/lib/freecad";
 import { safeFileName } from "@/lib/ids";
 import { generateScad, type ScadPayload } from "@/lib/scad";
@@ -44,6 +43,74 @@ function toMmToken(value: number): string {
 function toPositive(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
   return value;
+}
+
+type FocusTravelLike = {
+  originalFlangeDistanceMm?: number;
+  targetFlangeDistanceMm?: number;
+  donorFlangeToReferenceInfinityMm?: number;
+  donorFlangeToReferenceCloseFocusMm?: number;
+  infinityOvertravelMm?: number;
+  closeFocusExtraMarginMm?: number;
+  targetMountThroatDiameterMm?: number;
+  recommendedPrototypeTravelMm?: number;
+  prototypeStartMm?: number;
+};
+
+function toFiniteOrUndefined(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function getFocusTravelDerived(project: LensProject): {
+  recommendedPrototypeTravelMm?: number;
+  prototypeStartMm?: number;
+  targetMountThroatDiameterMm?: number;
+} {
+  const focus = (project as unknown as { focusTravel?: FocusTravelLike }).focusTravel;
+  if (!focus) {
+    return {};
+  }
+
+  const directRecommended = toFiniteOrUndefined(focus.recommendedPrototypeTravelMm);
+  const directStart = toFiniteOrUndefined(focus.prototypeStartMm);
+  if (directRecommended && directRecommended > 0) {
+    return {
+      recommendedPrototypeTravelMm: directRecommended,
+      prototypeStartMm: directStart,
+      targetMountThroatDiameterMm: toFiniteOrUndefined(focus.targetMountThroatDiameterMm)
+    };
+  }
+
+  const donorInfinity = toFiniteOrUndefined(focus.donorFlangeToReferenceInfinityMm);
+  const donorClose = toFiniteOrUndefined(focus.donorFlangeToReferenceCloseFocusMm);
+  const originalFlange = toFiniteOrUndefined(focus.originalFlangeDistanceMm);
+  const targetFlange = toFiniteOrUndefined(focus.targetFlangeDistanceMm);
+  const overtravel = Math.max(0, toFiniteOrUndefined(focus.infinityOvertravelMm) ?? 10);
+  const closeMargin = Math.max(0, toFiniteOrUndefined(focus.closeFocusExtraMarginMm) ?? 5);
+
+  if (
+    donorInfinity === undefined ||
+    donorClose === undefined ||
+    originalFlange === undefined ||
+    targetFlange === undefined
+  ) {
+    return {
+      targetMountThroatDiameterMm: toFiniteOrUndefined(focus.targetMountThroatDiameterMm)
+    };
+  }
+
+  const targetOffset = targetFlange - originalFlange;
+  const targetPositionInfinity = donorInfinity - targetOffset;
+  const targetPositionClose = donorClose - targetOffset;
+  const prototypeStart = targetPositionInfinity - overtravel;
+  const prototypeEnd = targetPositionClose + closeMargin;
+  const recommendedTravel = prototypeEnd - prototypeStart;
+
+  return {
+    recommendedPrototypeTravelMm: recommendedTravel > 0 ? recommendedTravel : undefined,
+    prototypeStartMm: prototypeStart,
+    targetMountThroatDiameterMm: toFiniteOrUndefined(focus.targetMountThroatDiameterMm)
+  };
 }
 
 function getNearestBarrelInnerDiameter(items: StackItem[], source?: StackItem): number | undefined {
@@ -81,8 +148,7 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
   const defaults = project.cadDefaults;
   const sourceName = source?.name ?? "part";
   const partName = `${partType}_${safeFileName(sourceName || "part")}`;
-  const normalizedFocus = normalizeFocusTravelSetup(project.focusTravel);
-  const focusCalculated = calculateFocusTravel(normalizedFocus);
+  const focusDerived = getFocusTravelDerived(project);
 
   switch (partType) {
     case "element_cup": {
@@ -219,7 +285,7 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
       const slotWidth = Number((pinDiameter + pinClearance).toFixed(3));
       const slotLength = Number(
         (
-          (focusCalculated.recommendedPrototypeTravelMm ?? defaults.plSlotLengthManualMm) + 2
+          (focusDerived.recommendedPrototypeTravelMm ?? defaults.plSlotLengthManualMm) + 2
         ).toFixed(3)
       );
       const stepUpStart = Math.max(
@@ -277,7 +343,7 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
         ).toFixed(3)
       );
       const focusTravelMm =
-        focusCalculated.recommendedPrototypeTravelMm ?? defaults.plSlotLengthManualMm;
+        focusDerived.recommendedPrototypeTravelMm ?? defaults.plSlotLengthManualMm;
       const carrierLength = Number(Math.max(18, Math.min(focusTravelMm * 0.72, 52)).toFixed(3));
       const pinHoleDiameter = Number((Math.max(1.5, defaults.plPinDiameterMm) + 0.1).toFixed(3));
       const pinBossDiameter = Number((pinHoleDiameter + 3).toFixed(3));
@@ -403,7 +469,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     }
     if (payload.type === "fixed_pl_barrel_with_slots") {
       if (slidingCarrierParamsForAssembly) {
-        const focus = calculateFocusTravel(normalizeFocusTravelSetup(project.focusTravel));
+        const focus = getFocusTravelDerived(project);
         return {
           type: "sliding_focus_assembly",
           params: {
@@ -419,8 +485,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
             fuseBarrelToPl: project.cadDefaults.plAssemblyFuseBarrelToPl,
             focusPrototypeStartMm: focus.prototypeStartMm,
             recommendedPrototypeTravelMm: focus.recommendedPrototypeTravelMm,
-            targetMountThroatDiameterMm: normalizeFocusTravelSetup(project.focusTravel)
-              .targetMountThroatDiameterMm
+            targetMountThroatDiameterMm: focus.targetMountThroatDiameterMm
           }
         };
       }
