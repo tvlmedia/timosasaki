@@ -8,10 +8,12 @@ import { Select } from "@/components/common/Select";
 import { WarningBox } from "@/components/common/WarningBox";
 import {
   getPartWarnings,
+  getLargestGlassDiameter,
   getRecommendedBarrelInnerDiameter,
   getRecommendedBarrelOuterDiameter,
   getTotalStackLength
 } from "@/lib/calculations";
+import { calculateFocusTravel, normalizeFocusTravelSetup } from "@/lib/focusTravel";
 import { generateFreecadMacro, type FreecadPayload } from "@/lib/freecad";
 import { safeFileName } from "@/lib/ids";
 import { generateScad, type ScadPayload } from "@/lib/scad";
@@ -79,6 +81,8 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
   const defaults = project.cadDefaults;
   const sourceName = source?.name ?? "part";
   const partName = `${partType}_${safeFileName(sourceName || "part")}`;
+  const normalizedFocus = normalizeFocusTravelSetup(project.focusTravel);
+  const focusCalculated = calculateFocusTravel(normalizedFocus);
 
   switch (partType) {
     case "element_cup": {
@@ -201,40 +205,98 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
       };
     }
     case "fixed_pl_barrel_with_slots": {
-      const inner = getRecommendedBarrelInnerDiameter(project.stackItems, defaults);
-      const outer = Math.max(inner + defaults.wallThicknessMm * 2, defaults.defaultOuterDiameterMm);
-      const mainBarrelLength = estimateMainBarrelLengthMm(project, source);
+      const recommendedInner = getRecommendedBarrelInnerDiameter(project.stackItems, defaults);
+      const mainBarrelInner = Math.max(
+        defaults.plMainBarrelInnerDiameterMm,
+        Number(recommendedInner.toFixed(3))
+      );
+      const mainBarrelOuter = Math.max(
+        defaults.plMainBarrelOuterDiameterMm,
+        Number((mainBarrelInner + defaults.wallThicknessMm * 2).toFixed(3))
+      );
+      const pinDiameter = Math.max(1, defaults.plPinDiameterMm);
+      const pinClearance = Math.max(0.1, defaults.plPinClearanceMm);
+      const slotWidth = Number((pinDiameter + pinClearance).toFixed(3));
+      const slotLength = Number(
+        (
+          (focusCalculated.recommendedPrototypeTravelMm ?? defaults.plSlotLengthManualMm) + 2
+        ).toFixed(3)
+      );
+      const stepUpStart = Math.max(
+        defaults.plLockingClearanceLengthMm,
+        defaults.plStepUpStartFromFlangeMm
+      );
+      const mainBarrelLength = Math.max(
+        defaults.plMainBarrelLengthMm,
+        estimateMainBarrelLengthMm(project, source)
+      );
+      const totalLength = Number((stepUpStart + mainBarrelLength).toFixed(3));
       return {
-        type: "main_barrel",
+        type: "fixed_pl_barrel_with_slots",
         params: {
           partName,
-          innerDiameterMm: inner,
-          outerDiameterMm: outer,
-          lengthMm: mainBarrelLength,
-          hasIrisSlot: false,
-          hasDiffusionSlot: false,
-          slotWidthMm: 4,
-          slotLengthMm: 14,
-          screwHoleCount: 0,
-          screwDiameterMm: defaults.screwDiameterMm,
+          innerDiameterMm: mainBarrelInner,
+          outerDiameterMm: mainBarrelOuter,
+          lengthMm: totalLength,
+          rearNeckOuterDiameterMm: defaults.plRearNeckOuterDiameterMm,
+          rearNeckInnerDiameterMm: defaults.plRearNeckInnerDiameterMm,
+          rearNeckLengthMm: defaults.plRearNeckLengthMm,
+          mainBarrelOuterDiameterMm: mainBarrelOuter,
+          mainBarrelInnerDiameterMm: mainBarrelInner,
+          mainBarrelLengthMm: mainBarrelLength,
+          plLockingClearanceLengthMm: defaults.plLockingClearanceLengthMm,
+          plLockingClearanceDiameterMm: defaults.plLockingClearanceDiameterMm,
+          stepUpStartFromPLFlangeMm: stepUpStart,
+          slotCount: Math.max(2, Math.round(defaults.plSlotCount)),
+          slotAngleOffsetDeg: defaults.plSlotAngleOffsetDeg,
+          slotLengthMm: Math.max(slotLength, 6),
+          slotWidthMm: slotWidth,
+          slotStartZMm: defaults.plSlotStartZMm,
+          pinDiameterMm: pinDiameter,
+          pinClearanceMm: pinClearance,
           facets: defaults.facets
         }
       };
     }
     case "sliding_optical_carrier": {
-      const inner = Math.max(getRecommendedBarrelInnerDiameter(project.stackItems, defaults) - 2, 20);
-      const outer = Math.max(inner + defaults.wallThicknessMm, inner + 1.5);
-      const mainBarrelLength = estimateMainBarrelLengthMm(project, source);
-      const carrierLength = Number(Math.max(18, Math.min(mainBarrelLength * 0.45, 42)).toFixed(1));
+      const largestGlassDiameter = getLargestGlassDiameter(project.stackItems);
+      const fixedInner = Math.max(
+        defaults.plMainBarrelInnerDiameterMm,
+        getRecommendedBarrelInnerDiameter(project.stackItems, defaults)
+      );
+      const carrierOuter = Number(
+        Math.max(
+          largestGlassDiameter + defaults.radialClearanceMm * 2 + 0.8,
+          fixedInner - (defaults.printToleranceMm + defaults.radialClearanceMm + 0.15) * 2
+        ).toFixed(3)
+      );
+      const carrierInner = Number(
+        Math.max(
+          largestGlassDiameter + defaults.radialClearanceMm * 2 + 0.4,
+          defaults.defaultInnerDiameterMm - 2
+        ).toFixed(3)
+      );
+      const focusTravelMm =
+        focusCalculated.recommendedPrototypeTravelMm ?? defaults.plSlotLengthManualMm;
+      const carrierLength = Number(Math.max(18, Math.min(focusTravelMm * 0.72, 52)).toFixed(3));
+      const pinHoleDiameter = Number((Math.max(1.5, defaults.plPinDiameterMm) + 0.1).toFixed(3));
+      const pinBossDiameter = Number((pinHoleDiameter + 3).toFixed(3));
+      const pinHoleZ = Number((carrierLength * 0.5).toFixed(3));
       return {
-        type: "moving_carrier",
+        type: "sliding_optical_carrier",
         params: {
           partName,
-          innerDiameterMm: inner,
-          outerDiameterMm: outer,
+          innerDiameterMm: Math.min(carrierInner, carrierOuter - 0.8),
+          outerDiameterMm: Math.max(carrierOuter, carrierInner + 0.8),
           lengthMm: carrierLength,
-          camPinDiameterMm: defaults.camPinDiameterMm,
-          antiRotationKeyEnabled: true,
+          startZMm: 0,
+          pinHoleCount: Math.max(2, Math.round(defaults.plSlotCount)),
+          pinHoleAngleOffsetDeg: defaults.plSlotAngleOffsetDeg,
+          pinHoleDiameterMm: pinHoleDiameter,
+          pinHoleZMm: pinHoleZ,
+          addPinBosses: true,
+          pinBossDiameterMm: pinBossDiameter,
+          pinBossHeightMm: 2,
           facets: defaults.facets
         }
       };
@@ -323,22 +385,32 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
 
   const sourceItem = sourceCandidates.find((item) => item.id === sourceItemId);
   const payload = createPayload(project, partType, sourceItem);
-  const freecadPayload: FreecadPayload | null =
-    payload.type === "spacer_ring"
-      ? {
-          type: "spacer_ring",
-          params: payload.params
-        }
-      : null;
+  const freecadPayload: FreecadPayload | null = (() => {
+    if (payload.type === "spacer_ring") {
+      return { type: "spacer_ring", params: payload.params };
+    }
+    if (payload.type === "element_cup") {
+      return { type: "element_cup", params: payload.params };
+    }
+    if (payload.type === "fixed_pl_barrel_with_slots") {
+      return { type: "fixed_pl_barrel_with_slots", params: payload.params };
+    }
+    if (payload.type === "sliding_optical_carrier") {
+      return { type: "sliding_optical_carrier", params: payload.params };
+    }
+    return null;
+  })();
   const code =
     exportMode === "freecad_macro"
       ? freecadPayload
         ? generateFreecadMacro(freecadPayload)
-        : "# FreeCAD export is currently available for Spacer / Air Gap Ring only."
+        : "# FreeCAD macro export is available for element cups, spacer rings, fixed PL barrel with slots, and sliding optical carrier."
       : generateScad(payload);
   const exportModeWarnings =
     exportMode === "freecad_macro" && !freecadPayload
-      ? ["FreeCAD macro export is currently available for Spacer / Air Gap Ring only."]
+      ? [
+          "FreeCAD macro export is available for element cups, spacer rings, fixed PL barrel with slots, and sliding optical carrier."
+        ]
       : [];
   const partWarnings = sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : [];
 
@@ -404,6 +476,35 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
       values.length = `${pretty(payload.params.lengthMm)} mm`;
       values.cam_pin_diameter = `${pretty(payload.params.camPinDiameterMm)} mm`;
+      return values;
+    }
+
+    if (payload.type === "fixed_pl_barrel_with_slots") {
+      values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
+      values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
+      values.total_length = `${pretty(payload.params.lengthMm)} mm`;
+      values.rear_neck_od = `${pretty(payload.params.rearNeckOuterDiameterMm)} mm`;
+      values.rear_neck_id = `${pretty(payload.params.rearNeckInnerDiameterMm)} mm`;
+      values.rear_neck_length = `${pretty(payload.params.rearNeckLengthMm)} mm`;
+      values.main_barrel_od = `${pretty(payload.params.mainBarrelOuterDiameterMm)} mm`;
+      values.main_barrel_id = `${pretty(payload.params.mainBarrelInnerDiameterMm)} mm`;
+      values.main_barrel_length = `${pretty(payload.params.mainBarrelLengthMm)} mm`;
+      values.slot_count = payload.params.slotCount;
+      values.slot_width = `${pretty(payload.params.slotWidthMm)} mm`;
+      values.slot_length = `${pretty(payload.params.slotLengthMm)} mm`;
+      values.pin_diameter = `${pretty(payload.params.pinDiameterMm)} mm`;
+      values.pin_clearance = `${pretty(payload.params.pinClearanceMm)} mm`;
+      return values;
+    }
+
+    if (payload.type === "sliding_optical_carrier") {
+      values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
+      values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
+      values.length = `${pretty(payload.params.lengthMm)} mm`;
+      values.pin_hole_count = payload.params.pinHoleCount;
+      values.pin_hole_diameter = `${pretty(payload.params.pinHoleDiameterMm)} mm`;
+      values.pin_hole_z = `${pretty(payload.params.pinHoleZMm)} mm`;
+      values.pin_bosses = payload.params.addPinBosses;
       return values;
     }
 
