@@ -18,6 +18,59 @@ const colorByOpticalType = {
   CUSTOM: "border-[#c8c8c8]"
 };
 
+function formatMm(value: number | undefined): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const text = value.toFixed(2).replace(/\.?0+$/, "");
+  return `${text}mm`;
+}
+
+function getQuickSpecs(item: StackItem): string {
+  switch (item.type) {
+    case "glass":
+      return [`D ${formatMm(item.diameterMm)}`, `T ${formatMm(item.thicknessMm)}`].filter(Boolean).join("  ·  ");
+    case "spacer":
+      return [
+        `ID ${formatMm(item.innerDiameterMm)}`,
+        `OD ${formatMm(item.outerDiameterMm)}`,
+        `T ${formatMm(item.thicknessMm)}`
+      ]
+        .filter(Boolean)
+        .join("  ·  ");
+    case "iris":
+      return [
+        `Disk ${formatMm(item.diskDiameterMm)}`,
+        `Aperture ${formatMm(item.apertureDiameterMm)}`,
+        `T ${formatMm(item.thicknessMm)}`
+      ]
+        .filter(Boolean)
+        .join("  ·  ");
+    case "diffusion":
+      return [
+        `Disk ${formatMm(item.diskDiameterMm)}`,
+        `Clear ${formatMm(item.clearCenterDiameterMm)}`,
+        `T ${formatMm(item.thicknessMm)}`
+      ]
+        .filter(Boolean)
+        .join("  ·  ");
+    case "mount":
+      return [`${item.mountType}`, `Clear ${formatMm(item.innerClearanceMm)}`, `FFD ${formatMm(item.flangeDistanceMm)}`]
+        .filter(Boolean)
+        .join("  ·  ");
+    case "barrel":
+      return [`ID ${formatMm(item.innerDiameterMm)}`, `OD ${formatMm(item.outerDiameterMm)}`, `L ${formatMm(item.lengthMm)}`]
+        .filter(Boolean)
+        .join("  ·  ");
+    case "retaining_ring":
+      return [`ID ${formatMm(item.innerDiameterMm)}`, `OD ${formatMm(item.outerDiameterMm)}`, `T ${formatMm(item.thicknessMm)}`]
+        .filter(Boolean)
+        .join("  ·  ");
+    case "custom":
+      return [`D ${formatMm(item.diameterMm)}`, `L ${formatMm(item.lengthMm)}`].filter(Boolean).join("  ·  ");
+    default:
+      return "";
+  }
+}
+
 export function StackItemCard({
   item,
   selected,
@@ -40,6 +93,7 @@ export function StackItemCard({
   const opticalTypeLabel = getItemOpticalTypeLabel(item);
   const opticalType = getItemOpticalType(item);
   const borderClass = colorByOpticalType[opticalType];
+  const quickSpecs = getQuickSpecs(item);
 
   return (
     <div
@@ -55,20 +109,25 @@ export function StackItemCard({
         <p className="text-sm font-medium text-labText">{item.name}</p>
         <span className="text-xs uppercase tracking-wide text-labMuted">{opticalTypeLabel}</span>
       </div>
-      <div className="grid grid-cols-3 gap-1">
-        <Button onClick={onMoveUp} className="px-2 py-1 text-xs">
-          Move Up
+      {quickSpecs && <p className="mono mb-2 text-[11px] text-labMuted">{quickSpecs}</p>}
+      <div className="grid grid-cols-4 gap-1">
+        <Button variant="ghost" onClick={onMoveUp} className="px-2 py-1 text-[11px]">
+          Up
         </Button>
-        <Button onClick={onMoveDown} className="px-2 py-1 text-xs">
-          Move Down
+        <Button variant="ghost" onClick={onMoveDown} className="px-2 py-1 text-[11px]">
+          Down
         </Button>
-        <Button onClick={onDuplicate} className="px-2 py-1 text-xs">
-          Duplicate
+        <Button variant="ghost" onClick={onDuplicate} className="px-2 py-1 text-[11px]">
+          Dup
         </Button>
-        <Button onClick={onToggleLock} className="px-2 py-1 text-xs">
-          {item.locked ? "Unlock" : "Lock item"}
+        <Button variant="ghost" onClick={onToggleLock} className="px-2 py-1 text-[11px]">
+          {item.locked ? "Unlock" : "Lock"}
         </Button>
-        <Button variant="danger" onClick={onDelete} className="col-span-2 px-2 py-1 text-xs">
+        <Button
+          variant="ghost"
+          onClick={onDelete}
+          className="col-span-4 border-labDanger/40 px-2 py-1 text-[11px] text-labDanger hover:border-labDanger hover:text-[#ff7c7c]"
+        >
           Delete
         </Button>
       </div>

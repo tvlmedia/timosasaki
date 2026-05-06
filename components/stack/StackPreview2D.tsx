@@ -18,6 +18,55 @@ const styleByOpticalType = {
   CUSTOM: { stroke: "#c8c8c8", fill: "#0f0f0f", dash: undefined as string | undefined }
 };
 
+function toPositive(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
+  return value;
+}
+
+function getOuterDiameterMm(item: StackItem): number {
+  switch (item.type) {
+    case "glass":
+      return toPositive(item.diameterMm);
+    case "spacer":
+      return toPositive(item.outerDiameterMm);
+    case "iris":
+      return toPositive(item.diskDiameterMm);
+    case "diffusion":
+      return toPositive(item.diskDiameterMm);
+    case "mount":
+      return Math.max(toPositive(item.innerClearanceMm) + 6, 24);
+    case "barrel":
+      return toPositive(item.outerDiameterMm);
+    case "retaining_ring":
+      return toPositive(item.outerDiameterMm);
+    case "custom":
+      return toPositive(item.diameterMm);
+    default:
+      return 0;
+  }
+}
+
+function getInnerOpeningMm(item: StackItem): number {
+  switch (item.type) {
+    case "glass":
+      return toPositive(item.clearApertureMm ?? item.diameterMm - 2);
+    case "spacer":
+      return toPositive(item.innerDiameterMm);
+    case "iris":
+      return toPositive(item.apertureDiameterMm);
+    case "diffusion":
+      return toPositive(item.clearCenterDiameterMm);
+    case "mount":
+      return toPositive(item.innerClearanceMm);
+    case "barrel":
+      return toPositive(item.innerDiameterMm);
+    case "retaining_ring":
+      return toPositive(item.innerDiameterMm);
+    default:
+      return 0;
+  }
+}
+
 export function StackPreview2D({
   items,
   selectedId,
@@ -28,9 +77,22 @@ export function StackPreview2D({
   onSelect: (id: string) => void;
 }) {
   const ordered = [...items].sort((a, b) => a.positionIndex - b.positionIndex);
-  const lengths = ordered.map((item) => Math.max(3, getItemAxialLength(item)));
-  const total = lengths.reduce((acc, value) => acc + value, 0) || 1;
-  const scale = 860 / total;
+  const outerDiameters = ordered.map((item) => Math.max(8, getOuterDiameterMm(item)));
+  const innerOpenings = ordered.map((item) => getInnerOpeningMm(item));
+  const maxDiameter = Math.max(...outerDiameters, 30);
+
+  const axialMm = ordered.map((item) => Math.max(0.6, getItemAxialLength(item)));
+  const gap = 4;
+  const usableWidth = 860;
+  const minWidth = 14;
+  const totalGaps = gap * Math.max(0, ordered.length - 1);
+  const sumAxial = axialMm.reduce((acc, value) => acc + value, 0) || 1;
+  const scale = Math.max(0, (usableWidth - totalGaps - ordered.length * minWidth) / sumAxial);
+  const widths = axialMm.map((value) => minWidth + value * scale);
+
+  const centerY = 160;
+  const maxRenderedHeight = 244;
+  const diameterScale = maxRenderedHeight / maxDiameter;
 
   let cursor = 20;
 
@@ -40,34 +102,62 @@ export function StackPreview2D({
         <span>Front</span>
         <span>Sensor</span>
       </div>
-      <svg viewBox="0 0 900 190" className="h-56 w-full rounded-xl border border-labBorder bg-[#070707]">
+      <svg viewBox="0 0 900 320" className="h-80 w-full rounded-xl border border-labBorder bg-[#070707]">
+        <line x1={18} y1={centerY} x2={882} y2={centerY} stroke="#17304a" strokeWidth={0.8} />
+
         {ordered.map((item, index) => {
-          const width = Math.max(24, lengths[index] * scale);
+          const width = widths[index];
           const x = cursor;
-          cursor += width + 4;
+          cursor += width + gap;
           const selected = item.id === selectedId;
           const opticalType = getItemOpticalType(item);
           const style = styleByOpticalType[opticalType];
+          const outerHeight = Math.max(18, outerDiameters[index] * diameterScale);
+          const y = centerY - outerHeight / 2;
+
+          const innerOpeningMm = innerOpenings[index];
+          const innerHeightRaw = innerOpeningMm * diameterScale;
+          const innerHeight = Math.max(0, Math.min(outerHeight - 6, innerHeightRaw));
+          const showInnerOpening = innerHeight > 4 && width > 8;
+
+          const showText = width > 56;
+          const shortName = item.name.length > 18 ? `${item.name.slice(0, 18)}…` : item.name;
 
           return (
             <g key={item.id} onClick={() => onSelect(item.id)} className="cursor-pointer">
               <rect
                 x={x}
-                y={48}
+                y={y}
                 width={width}
-                height={92}
+                height={outerHeight}
                 fill={selected ? "#102840" : style.fill}
                 stroke={style.stroke}
                 strokeWidth={selected ? 2.2 : 1.2}
                 strokeDasharray={style.dash}
                 rx={8}
               />
-              <text x={x + width / 2} y={95} fill="#f5f5f5" textAnchor="middle" fontSize="10">
-                {item.name.slice(0, 18)}
-              </text>
-              <text x={x + width / 2} y={112} fill="#999999" textAnchor="middle" fontSize="9">
-                {getItemOpticalTypeLabel(item)}
-              </text>
+              {showInnerOpening && (
+                <rect
+                  x={x + 1}
+                  y={centerY - innerHeight / 2}
+                  width={Math.max(1, width - 2)}
+                  height={innerHeight}
+                  fill="#050505"
+                  stroke="#1f1f1f"
+                  strokeWidth={0.5}
+                  rx={2}
+                />
+              )}
+              {showText && (
+                <>
+                  <text x={x + width / 2} y={centerY - 8} fill="#f5f5f5" textAnchor="middle" fontSize="9.5">
+                    {shortName}
+                  </text>
+                  <text x={x + width / 2} y={centerY + 10} fill="#9a9a9a" textAnchor="middle" fontSize="8.5">
+                    {getItemOpticalTypeLabel(item)}
+                  </text>
+                </>
+              )}
             </g>
           );
         })}
