@@ -8,6 +8,8 @@ export type CadPartType =
   | "iris_disk"
   | "diffusion_holder"
   | "retaining_ring"
+  | "fixed_pl_barrel_with_slots"
+  | "sliding_optical_carrier"
   | "main_barrel"
   | "moving_carrier"
   | "cam_sleeve";
@@ -18,21 +20,29 @@ const partOptions: Array<{ value: CadPartType; label: string }> = [
   { value: "iris_disk", label: "Iris disk from iris item" },
   { value: "diffusion_holder", label: "Diffusion holder from diffusion item" },
   { value: "retaining_ring", label: "Retaining ring from retaining ring item" },
-  { value: "main_barrel", label: "Main barrel" },
-  { value: "moving_carrier", label: "Moving carrier" },
-  { value: "cam_sleeve", label: "Cam sleeve" }
+  { value: "fixed_pl_barrel_with_slots", label: "Fixed PL barrel with axial guide slots" },
+  { value: "sliding_optical_carrier", label: "Sliding optical carrier with pin holes" },
+  { value: "main_barrel", label: "Main barrel (legacy/simple)" }
 ];
 
 export function CadPartSelector({
   value,
-  onChange
+  onChange,
+  elementCupLabel
 }: {
   value: CadPartType;
   onChange: (value: CadPartType) => void;
+  elementCupLabel?: string;
 }) {
+  const resolvedOptions = partOptions.map((option) =>
+    option.value === "element_cup" && elementCupLabel
+      ? { ...option, label: elementCupLabel }
+      : option
+  );
+
   return (
     <Select label="Part Type" value={value} onChange={(event) => onChange(event.target.value as CadPartType)}>
-      {partOptions.map((option) => (
+      {resolvedOptions.map((option) => (
         <option key={option.value} value={option.value}>
           {option.label}
         </option>

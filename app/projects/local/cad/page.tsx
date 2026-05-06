@@ -1,13 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
-import { Button } from "@/components/common/Button";
+import { ProjectModuleNav } from "@/components/projects/ProjectModuleNav";
 import { WarningBox } from "@/components/common/WarningBox";
 import { CadGeneratorPanel } from "@/components/cad/CadGeneratorPanel";
-import { projectDetailHref } from "@/lib/routes";
-import { getProject } from "@/lib/storage";
+import { exportProjectJson, getProject } from "@/lib/storage";
 import type { LensProject } from "@/types";
 
 export default function CadPage() {
@@ -71,9 +69,11 @@ export default function CadPage() {
       title="CAD Generator"
       projectName={project.name}
       actions={
-        <Link href={projectDetailHref(project.id)}>
-          <Button>Project</Button>
-        </Link>
+        <ProjectModuleNav
+          projectId={project.id}
+          active="cad"
+          onExport={() => exportProjectJson(project)}
+        />
       }
     >
       <div className="mb-4">

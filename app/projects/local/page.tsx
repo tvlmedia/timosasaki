@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/common/Button";
+import { ProjectModuleNav } from "@/components/projects/ProjectModuleNav";
 import { Input } from "@/components/common/Input";
 import { TargetLookRadar } from "@/components/projects/TargetLookRadar";
 import {
@@ -80,7 +81,13 @@ export default function ProjectDetailPage() {
     <AppShell
       title="Project Detail"
       projectName={project.name}
-      actions={<Button onClick={() => exportProjectJson(project)}>Export JSON</Button>}
+      actions={
+        <ProjectModuleNav
+          projectId={project.id}
+          active="project"
+          onExport={() => exportProjectJson(project)}
+        />
+      }
     >
       <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-4">

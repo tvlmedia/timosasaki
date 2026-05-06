@@ -1,13 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
-import { Button } from "@/components/common/Button";
+import { ProjectModuleNav } from "@/components/projects/ProjectModuleNav";
 import { ExperimentCard } from "@/components/experiments/ExperimentCard";
 import { ExperimentForm } from "@/components/experiments/ExperimentForm";
-import { projectDetailHref } from "@/lib/routes";
-import { getProject, saveProject } from "@/lib/storage";
+import { exportProjectJson, getProject, saveProject } from "@/lib/storage";
 import type { Experiment, LensProject } from "@/types";
 
 export default function ExperimentsPage() {
@@ -59,9 +57,11 @@ export default function ExperimentsPage() {
       title="Experiments"
       projectName={project.name}
       actions={
-        <Link href={projectDetailHref(project.id)}>
-          <Button>Project</Button>
-        </Link>
+        <ProjectModuleNav
+          projectId={project.id}
+          active="experiments"
+          onExport={() => exportProjectJson(project)}
+        />
       }
     >
       <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">

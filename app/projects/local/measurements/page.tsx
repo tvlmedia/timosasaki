@@ -1,11 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
-import { Button } from "@/components/common/Button";
+import { ProjectModuleNav } from "@/components/projects/ProjectModuleNav";
 import { MeasurementsBoard } from "@/components/measurements/MeasurementsBoard";
-import { projectDetailHref } from "@/lib/routes";
 import { exportProjectJson, getProject, saveProject } from "@/lib/storage";
 import type { LensProject } from "@/types";
 
@@ -49,12 +47,11 @@ export default function MeasurementsPage() {
       title="Measurements"
       projectName={project.name}
       actions={
-        <>
-          <Link href={projectDetailHref(project.id)}>
-            <Button>Project</Button>
-          </Link>
-          <Button onClick={() => exportProjectJson(project)}>Export JSON</Button>
-        </>
+        <ProjectModuleNav
+          projectId={project.id}
+          active="measurements"
+          onExport={() => exportProjectJson(project)}
+        />
       }
     >
       <MeasurementsBoard
