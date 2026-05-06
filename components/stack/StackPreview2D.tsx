@@ -1,6 +1,7 @@
 "use client";
 
 import { getItemAxialLength } from "@/lib/calculations";
+import { getItemOpticalTypeLabel } from "@/lib/stackMeta";
 import type { StackItem } from "@/types";
 
 const colorByType: Record<StackItem["type"], string> = {
@@ -59,7 +60,7 @@ export function StackPreview2D({
                 {item.name.slice(0, 18)}
               </text>
               <text x={x + width / 2} y={112} fill="#999999" textAnchor="middle" fontSize="9">
-                {item.type}
+                {getItemOpticalTypeLabel(item)}
               </text>
             </g>
           );

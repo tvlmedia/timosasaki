@@ -8,10 +8,24 @@ export type StackItemType =
   | "retaining_ring"
   | "custom";
 
+export type OpticalItemType =
+  | "GLASS"
+  | "AIR_GAP"
+  | "IRIS"
+  | "DIFFUSION"
+  | "FILTER"
+  | "EFFECT"
+  | "SPACER"
+  | "MOUNT"
+  | "BARREL"
+  | "RETAINING_RING"
+  | "CUSTOM";
+
 export type BaseStackItem = {
   id: string;
   name: string;
   type: StackItemType;
+  opticalType?: OpticalItemType;
   positionIndex: number;
   locked?: boolean;
   notes?: string;

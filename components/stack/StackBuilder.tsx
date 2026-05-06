@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { createId } from "@/lib/ids";
+import { defaultOpticalTypeByStackType, getItemOpticalType, opticalTypeOptions } from "@/lib/stackMeta";
 import { Button } from "@/components/common/Button";
 import { Input } from "@/components/common/Input";
 import { NumberInput } from "@/components/common/NumberInput";
@@ -11,7 +12,7 @@ import { AddStackItemModal } from "@/components/stack/AddStackItemModal";
 import { StackItemCard } from "@/components/stack/StackItemCard";
 import { StackPreview2D } from "@/components/stack/StackPreview2D";
 import { StackSummary } from "@/components/stack/StackSummary";
-import type { LensProject, StackItem, StackItemType } from "@/types";
+import type { LensProject, OpticalItemType, StackItem, StackItemType } from "@/types";
 
 function normalizePositions(items: StackItem[]): StackItem[] {
   return items
@@ -22,12 +23,14 @@ function normalizePositions(items: StackItem[]): StackItem[] {
 
 function createStackItem(type: StackItemType, index: number): StackItem {
   const id = createId(type);
+  const opticalType = defaultOpticalTypeByStackType[type];
   switch (type) {
     case "glass":
       return {
         id,
         name: "New glass",
         type,
+        opticalType,
         positionIndex: index,
         diameterMm: 30,
         thicknessMm: 4,
@@ -38,6 +41,7 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         id,
         name: "New spacer",
         type,
+        opticalType,
         positionIndex: index,
         innerDiameterMm: 26,
         outerDiameterMm: 34,
@@ -48,6 +52,7 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         id,
         name: "New iris",
         type,
+        opticalType,
         positionIndex: index,
         diskDiameterMm: 30,
         apertureDiameterMm: 14,
@@ -59,6 +64,7 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         id,
         name: "New diffusion",
         type,
+        opticalType,
         positionIndex: index,
         diskDiameterMm: 30,
         clearCenterDiameterMm: 12,
@@ -70,6 +76,7 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         id,
         name: "New mount",
         type,
+        opticalType,
         positionIndex: index,
         mountType: "PL",
         flangeDistanceMm: 52,
@@ -80,6 +87,7 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         id,
         name: "New barrel",
         type,
+        opticalType,
         positionIndex: index,
         innerDiameterMm: 40,
         outerDiameterMm: 44,
@@ -91,6 +99,7 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         id,
         name: "New retaining ring",
         type,
+        opticalType,
         positionIndex: index,
         innerDiameterMm: 30,
         outerDiameterMm: 34,
@@ -102,6 +111,7 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         id,
         name: "New custom item",
         type,
+        opticalType,
         positionIndex: index,
         lengthMm: 0
       };
@@ -286,6 +296,22 @@ export function StackBuilder({
                   }))
                 }
               />
+              <Select
+                label="Type"
+                value={getItemOpticalType(selectedItem)}
+                onChange={(event) =>
+                  updateItem(selectedItem.id, (entry) => ({
+                    ...entry,
+                    opticalType: event.target.value as OpticalItemType
+                  }))
+                }
+              >
+                {opticalTypeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
               <Input
                 label="Notes"
                 value={selectedItem.notes ?? ""}

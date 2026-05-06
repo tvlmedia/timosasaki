@@ -57,6 +57,7 @@ export function createDemoProject(): LensProject {
       {
         id: "e1",
         type: "glass",
+        opticalType: "GLASS",
         name: "E1 front element",
         positionIndex: 0,
         diameterMm: 30.97,
@@ -69,6 +70,7 @@ export function createDemoProject(): LensProject {
       {
         id: "spacer1",
         type: "spacer",
+        opticalType: "SPACER",
         name: "Spacer E1-E2",
         positionIndex: 1,
         innerDiameterMm: 28,
@@ -79,6 +81,7 @@ export function createDemoProject(): LensProject {
       {
         id: "e2",
         type: "glass",
+        opticalType: "GLASS",
         name: "E2 element",
         positionIndex: 2,
         diameterMm: 27.93,
@@ -90,6 +93,7 @@ export function createDemoProject(): LensProject {
       {
         id: "diff1",
         type: "diffusion",
+        opticalType: "DIFFUSION",
         name: "Clear-center diffusion disk",
         positionIndex: 3,
         diskDiameterMm: 30,
@@ -103,6 +107,7 @@ export function createDemoProject(): LensProject {
       {
         id: "iris1",
         type: "iris",
+        opticalType: "IRIS",
         name: "Iris disk 14mm",
         positionIndex: 4,
         diskDiameterMm: 30,
@@ -116,6 +121,7 @@ export function createDemoProject(): LensProject {
       {
         id: "spacer2",
         type: "spacer",
+        opticalType: "SPACER",
         name: "Spacer iris-rear group",
         positionIndex: 5,
         innerDiameterMm: 24,
@@ -126,6 +132,7 @@ export function createDemoProject(): LensProject {
       {
         id: "rear",
         type: "glass",
+        opticalType: "GLASS",
         name: "Rear group E3/E4",
         positionIndex: 6,
         diameterMm: 26.43,
@@ -137,6 +144,7 @@ export function createDemoProject(): LensProject {
       {
         id: "mount",
         type: "mount",
+        opticalType: "MOUNT",
         name: "PL mount placeholder",
         positionIndex: 7,
         mountType: "PL",

@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/common/Button";
+import { getItemOpticalTypeLabel } from "@/lib/stackMeta";
 import type { StackItem } from "@/types";
 
 const colorByType: Record<StackItem["type"], string> = {
@@ -33,6 +34,8 @@ export function StackItemCard({
   onDelete: () => void;
   onToggleLock: () => void;
 }) {
+  const opticalTypeLabel = getItemOpticalTypeLabel(item);
+
   return (
     <div
       className={`rounded-xl border bg-[#0b0b0b] p-3 ${selected ? "border-labAccent" : colorByType[item.type]}`}
@@ -45,7 +48,7 @@ export function StackItemCard({
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <p className="text-sm font-medium text-labText">{item.name}</p>
-        <span className="text-xs uppercase tracking-wide text-labMuted">{item.type}</span>
+        <span className="text-xs uppercase tracking-wide text-labMuted">{opticalTypeLabel}</span>
       </div>
       <div className="grid grid-cols-3 gap-1">
         <Button onClick={onMoveUp} className="px-2 py-1 text-xs">
