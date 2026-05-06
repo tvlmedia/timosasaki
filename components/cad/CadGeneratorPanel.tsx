@@ -149,6 +149,26 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
   const sourceName = source?.name ?? "part";
   const partName = `${partType}_${safeFileName(sourceName || "part")}`;
   const focusDerived = getFocusTravelDerived(project);
+  const plRearNeckOuter = defaults.plRearNeckOuterDiameterMm ?? 31.0;
+  const plRearNeckInner = defaults.plRearNeckInnerDiameterMm ?? 26.0;
+  const plRearNeckLength = defaults.plRearNeckLengthMm ?? 12.0;
+  const plLockClearanceLength = defaults.plLockingClearanceLengthMm ?? 12.0;
+  const plLockClearanceDiameter = defaults.plLockingClearanceDiameterMm ?? 42.0;
+  const plMainBarrelOuterDefault = defaults.plMainBarrelOuterDiameterMm ?? 44.0;
+  const plMainBarrelInnerDefault = defaults.plMainBarrelInnerDiameterMm ?? 40.0;
+  const plMainBarrelLengthDefault = defaults.plMainBarrelLengthMm ?? 50.0;
+  const plStepUpStart = defaults.plStepUpStartFromFlangeMm ?? 12.0;
+  const plSlotCount = Math.max(2, Math.round(defaults.plSlotCount ?? 2));
+  const plSlotAngleOffset = defaults.plSlotAngleOffsetDeg ?? 0;
+  const plSlotLengthManual = defaults.plSlotLengthManualMm ?? 30.0;
+  const plSlotStartZ = defaults.plSlotStartZMm ?? 13.0;
+  const plPinDiameter = Math.max(1, defaults.plPinDiameterMm ?? defaults.camPinDiameterMm ?? 2);
+  const plPinClearance = Math.max(0.1, defaults.plPinClearanceMm ?? 0.3);
+  const plAssemblyIncludeMain = defaults.plAssemblyIncludeMainBarrelSection ?? true;
+  const plAssemblyIncludeCarrier = defaults.plAssemblyIncludeMovingCarrier ?? true;
+  const plAssemblyIncludePins = defaults.plAssemblyIncludeGuidePins ?? true;
+  const plAssemblyFuse = defaults.plAssemblyFuseBarrelToPl ?? false;
+  const plStepReferencePath = defaults.plStepReferencePath ?? "cad/reference/PL_Lens_Tail.STEP";
 
   switch (partType) {
     case "element_cup": {
@@ -273,27 +293,27 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
     case "fixed_pl_barrel_with_slots": {
       const recommendedInner = getRecommendedBarrelInnerDiameter(project.stackItems, defaults);
       const mainBarrelInner = Math.max(
-        defaults.plMainBarrelInnerDiameterMm,
+        plMainBarrelInnerDefault,
         Number(recommendedInner.toFixed(3))
       );
       const mainBarrelOuter = Math.max(
-        defaults.plMainBarrelOuterDiameterMm,
+        plMainBarrelOuterDefault,
         Number((mainBarrelInner + defaults.wallThicknessMm * 2).toFixed(3))
       );
-      const pinDiameter = Math.max(1, defaults.plPinDiameterMm);
-      const pinClearance = Math.max(0.1, defaults.plPinClearanceMm);
+      const pinDiameter = plPinDiameter;
+      const pinClearance = plPinClearance;
       const slotWidth = Number((pinDiameter + pinClearance).toFixed(3));
       const slotLength = Number(
         (
-          (focusDerived.recommendedPrototypeTravelMm ?? defaults.plSlotLengthManualMm) + 2
+          (focusDerived.recommendedPrototypeTravelMm ?? plSlotLengthManual) + 2
         ).toFixed(3)
       );
       const stepUpStart = Math.max(
-        defaults.plLockingClearanceLengthMm,
-        defaults.plStepUpStartFromFlangeMm
+        plLockClearanceLength,
+        plStepUpStart
       );
       const mainBarrelLength = Math.max(
-        defaults.plMainBarrelLengthMm,
+        plMainBarrelLengthDefault,
         estimateMainBarrelLengthMm(project, source)
       );
       const totalLength = Number((stepUpStart + mainBarrelLength).toFixed(3));
@@ -304,20 +324,20 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
           innerDiameterMm: mainBarrelInner,
           outerDiameterMm: mainBarrelOuter,
           lengthMm: totalLength,
-          rearNeckOuterDiameterMm: defaults.plRearNeckOuterDiameterMm,
-          rearNeckInnerDiameterMm: defaults.plRearNeckInnerDiameterMm,
-          rearNeckLengthMm: defaults.plRearNeckLengthMm,
+          rearNeckOuterDiameterMm: plRearNeckOuter,
+          rearNeckInnerDiameterMm: plRearNeckInner,
+          rearNeckLengthMm: plRearNeckLength,
           mainBarrelOuterDiameterMm: mainBarrelOuter,
           mainBarrelInnerDiameterMm: mainBarrelInner,
           mainBarrelLengthMm: mainBarrelLength,
-          plLockingClearanceLengthMm: defaults.plLockingClearanceLengthMm,
-          plLockingClearanceDiameterMm: defaults.plLockingClearanceDiameterMm,
+          plLockingClearanceLengthMm: plLockClearanceLength,
+          plLockingClearanceDiameterMm: plLockClearanceDiameter,
           stepUpStartFromPLFlangeMm: stepUpStart,
-          slotCount: Math.max(2, Math.round(defaults.plSlotCount)),
-          slotAngleOffsetDeg: defaults.plSlotAngleOffsetDeg,
+          slotCount: plSlotCount,
+          slotAngleOffsetDeg: plSlotAngleOffset,
           slotLengthMm: Math.max(slotLength, 6),
           slotWidthMm: slotWidth,
-          slotStartZMm: defaults.plSlotStartZMm,
+          slotStartZMm: plSlotStartZ,
           pinDiameterMm: pinDiameter,
           pinClearanceMm: pinClearance,
           facets: defaults.facets
@@ -327,7 +347,7 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
     case "sliding_optical_carrier": {
       const largestGlassDiameter = getLargestGlassDiameter(project.stackItems);
       const fixedInner = Math.max(
-        defaults.plMainBarrelInnerDiameterMm,
+        plMainBarrelInnerDefault,
         getRecommendedBarrelInnerDiameter(project.stackItems, defaults)
       );
       const carrierOuter = Number(
@@ -343,9 +363,9 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
         ).toFixed(3)
       );
       const focusTravelMm =
-        focusDerived.recommendedPrototypeTravelMm ?? defaults.plSlotLengthManualMm;
+        focusDerived.recommendedPrototypeTravelMm ?? plSlotLengthManual;
       const carrierLength = Number(Math.max(18, Math.min(focusTravelMm * 0.72, 52)).toFixed(3));
-      const pinHoleDiameter = Number((Math.max(1.5, defaults.plPinDiameterMm) + 0.1).toFixed(3));
+      const pinHoleDiameter = Number((Math.max(1.5, plPinDiameter) + 0.1).toFixed(3));
       const pinBossDiameter = Number((pinHoleDiameter + 3).toFixed(3));
       const pinHoleZ = Number((carrierLength * 0.5).toFixed(3));
       return {
@@ -356,8 +376,8 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
           outerDiameterMm: Math.max(carrierOuter, carrierInner + 0.8),
           lengthMm: carrierLength,
           startZMm: 0,
-          pinHoleCount: Math.max(2, Math.round(defaults.plSlotCount)),
-          pinHoleAngleOffsetDeg: defaults.plSlotAngleOffsetDeg,
+          pinHoleCount: plSlotCount,
+          pinHoleAngleOffsetDeg: plSlotAngleOffset,
           pinHoleDiameterMm: pinHoleDiameter,
           pinHoleZMm: pinHoleZ,
           addPinBosses: true,
@@ -474,15 +494,15 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
           type: "sliding_focus_assembly",
           params: {
             partName: `${payload.params.partName}_pl_assembly`,
-            plStepReferencePath: project.cadDefaults.plStepReferencePath,
+            plStepReferencePath: plStepReferencePath,
             fixedBarrel: payload.params,
             slidingCarrier: slidingCarrierParamsForAssembly,
-            includeMainBarrelSection: project.cadDefaults.plAssemblyIncludeMainBarrelSection,
-            includeSlidingCarrier: project.cadDefaults.plAssemblyIncludeMovingCarrier,
-            includeGuidePins: project.cadDefaults.plAssemblyIncludeGuidePins,
+            includeMainBarrelSection: plAssemblyIncludeMain,
+            includeSlidingCarrier: plAssemblyIncludeCarrier,
+            includeGuidePins: plAssemblyIncludePins,
             guidePinDiameterMm: payload.params.pinDiameterMm,
             guidePinLengthMm: Math.max(payload.params.slotWidthMm * 4, 8),
-            fuseBarrelToPl: project.cadDefaults.plAssemblyFuseBarrelToPl,
+            fuseBarrelToPl: plAssemblyFuse,
             focusPrototypeStartMm: focus.prototypeStartMm,
             recommendedPrototypeTravelMm: focus.recommendedPrototypeTravelMm,
             targetMountThroatDiameterMm: focus.targetMountThroatDiameterMm

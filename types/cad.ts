@@ -1,3 +1,5 @@
+import type { StepDirection } from "@/types/measurement";
+
 export type CadDefaults = {
   printToleranceMm: number;
   radialClearanceMm: number;
@@ -10,12 +12,41 @@ export type CadDefaults = {
   defaultOuterDiameterMm: number;
   defaultInnerDiameterMm: number;
   facets: number;
+  plStepReferencePath?: string;
+  plRearNeckOuterDiameterMm?: number;
+  plRearNeckInnerDiameterMm?: number;
+  plRearNeckLengthMm?: number;
+  plLockingClearanceLengthMm?: number;
+  plLockingClearanceDiameterMm?: number;
+  plMainBarrelOuterDiameterMm?: number;
+  plMainBarrelInnerDiameterMm?: number;
+  plMainBarrelLengthMm?: number;
+  plStepUpStartFromFlangeMm?: number;
+  plSlotCount?: number;
+  plSlotAngleOffsetDeg?: number;
+  plSlotLengthManualMm?: number;
+  plSlotStartZMm?: number;
+  plPinDiameterMm?: number;
+  plPinClearanceMm?: number;
+  plAssemblyIncludeMainBarrelSection?: boolean;
+  plAssemblyIncludeMovingCarrier?: boolean;
+  plAssemblyIncludeGuidePins?: boolean;
+  plAssemblyFuseBarrelToPl?: boolean;
+};
+
+export type SteppedCupProfile = {
+  largeDiameterMm: number;
+  smallDiameterMm: number;
+  largeSectionThicknessMm: number;
+  smallSectionThicknessMm: number;
+  stepDirection: StepDirection;
 };
 
 export type ElementCupParams = {
   partName: string;
   glassDiameterMm: number;
   glassThicknessMm: number;
+  steppedProfile?: SteppedCupProfile;
   profileSegments?: Array<{
     name?: string;
     diameterMm: number;
@@ -110,4 +141,61 @@ export type CamSleeveParams = {
   axialTravelMm: number;
   slotWidthMm: number;
   facets: number;
+};
+
+export type FixedPLBarrelWithSlotsParams = {
+  partName: string;
+  innerDiameterMm: number;
+  outerDiameterMm: number;
+  lengthMm: number;
+  rearNeckOuterDiameterMm: number;
+  rearNeckInnerDiameterMm: number;
+  rearNeckLengthMm: number;
+  mainBarrelOuterDiameterMm: number;
+  mainBarrelInnerDiameterMm: number;
+  mainBarrelLengthMm: number;
+  plLockingClearanceLengthMm: number;
+  plLockingClearanceDiameterMm?: number;
+  stepUpStartFromPLFlangeMm: number;
+  slotCount: number;
+  slotAngleOffsetDeg: number;
+  slotLengthMm: number;
+  slotWidthMm: number;
+  slotStartZMm: number;
+  slotCenterRadiusMm?: number;
+  pinDiameterMm: number;
+  pinClearanceMm: number;
+  facets: number;
+};
+
+export type SlidingOpticalCarrierParams = {
+  partName: string;
+  innerDiameterMm: number;
+  outerDiameterMm: number;
+  lengthMm: number;
+  startZMm?: number;
+  pinHoleCount: number;
+  pinHoleAngleOffsetDeg: number;
+  pinHoleDiameterMm: number;
+  pinHoleZMm: number;
+  addPinBosses: boolean;
+  pinBossDiameterMm?: number;
+  pinBossHeightMm?: number;
+  facets: number;
+};
+
+export type SlidingFocusAssemblyMacroParams = {
+  partName: string;
+  plStepReferencePath: string;
+  fixedBarrel: FixedPLBarrelWithSlotsParams;
+  slidingCarrier: SlidingOpticalCarrierParams;
+  includeMainBarrelSection: boolean;
+  includeSlidingCarrier: boolean;
+  includeGuidePins: boolean;
+  guidePinDiameterMm: number;
+  guidePinLengthMm: number;
+  fuseBarrelToPl: boolean;
+  focusPrototypeStartMm?: number;
+  recommendedPrototypeTravelMm?: number;
+  targetMountThroatDiameterMm?: number;
 };
