@@ -134,6 +134,7 @@ export type BarrelItem = BaseStackItem & {
   innerDiameterMm: number;
   outerDiameterMm: number;
   lengthMm: number;
+  autoFitToStack?: boolean;
   hasIrisSlot?: boolean;
   hasDiffusionSlot?: boolean;
   screwHoleCount?: number;
@@ -144,6 +145,7 @@ export type RetainingRingItem = BaseStackItem & {
   innerDiameterMm: number;
   outerDiameterMm: number;
   thicknessMm: number;
+  autoFitToBarrel?: boolean;
   notchCount?: number;
 };
 

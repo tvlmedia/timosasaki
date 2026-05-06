@@ -106,6 +106,7 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         innerDiameterMm: 40,
         outerDiameterMm: 44,
         lengthMm: 40,
+        autoFitToStack: true,
         screwHoleCount: 0
       };
     case "retaining_ring":
@@ -118,6 +119,7 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         innerDiameterMm: 30,
         outerDiameterMm: 34,
         thicknessMm: 1.5,
+        autoFitToBarrel: true,
         notchCount: 2
       };
     case "custom":
@@ -252,8 +254,65 @@ function deriveSpacerRingDimensions(items: StackItem[], defaults: CadDefaults, i
   };
 }
 
+function deriveBarrelDimensionsFromStack(items: StackItem[], defaults: CadDefaults): {
+  innerDiameterMm: number;
+  outerDiameterMm: number;
+} {
+  const innerDiameterMm = Number(getRecommendedBarrelInnerDiameter(items, defaults).toFixed(2));
+  const outerDiameterMm = Number((innerDiameterMm + defaults.wallThicknessMm * 2).toFixed(2));
+  return {
+    innerDiameterMm,
+    outerDiameterMm
+  };
+}
+
+function isAutoFitBarrel(item: Extract<StackItem, { type: "barrel" }>): boolean {
+  return item.autoFitToStack !== false;
+}
+
+function applyAutoFitBarrelDimensions(items: StackItem[], defaults: CadDefaults): StackItem[] {
+  const hasAutoBarrel = items.some((item) => item.type === "barrel" && isAutoFitBarrel(item));
+  if (!hasAutoBarrel) return items;
+
+  const target = deriveBarrelDimensionsFromStack(items, defaults);
+  return items.map((item) => {
+    if (item.type !== "barrel" || !isAutoFitBarrel(item)) return item;
+    return {
+      ...item,
+      innerDiameterMm: target.innerDiameterMm,
+      outerDiameterMm: target.outerDiameterMm
+    };
+  });
+}
+
 function isAutoFitSpacer(item: Extract<StackItem, { type: "spacer" }>): boolean {
   return item.autoFitToBarrel !== false;
+}
+
+function deriveRetainingRingDimensions(items: StackItem[], defaults: CadDefaults, index: number): {
+  innerDiameterMm: number;
+  outerDiameterMm: number;
+} {
+  const barrelInner = getReferenceBarrelInnerDiameter(items, defaults, index);
+  const fitClearancePerSide = Math.max(defaults.radialClearanceMm + defaults.printToleranceMm, 0.25);
+  const outerDiameterMm = Math.max(10, barrelInner - fitClearancePerSide * 2);
+  const innerDiameterMm = Math.max(4, outerDiameterMm - 2.4);
+  return {
+    innerDiameterMm: Number(innerDiameterMm.toFixed(2)),
+    outerDiameterMm: Number(outerDiameterMm.toFixed(2))
+  };
+}
+
+function isAutoFitRetainingRing(item: Extract<StackItem, { type: "retaining_ring" }>): boolean {
+  return item.autoFitToBarrel !== false;
+}
+
+function applyAutoFitRetainingRingDimensions(items: StackItem[], defaults: CadDefaults): StackItem[] {
+  return items.map((item, index) => {
+    if (item.type !== "retaining_ring" || !isAutoFitRetainingRing(item)) return item;
+    const auto = deriveRetainingRingDimensions(items, defaults, index);
+    return { ...item, ...auto };
+  });
 }
 
 function applyAutoFitSpacerDimensions(items: StackItem[], defaults: CadDefaults): StackItem[] {
@@ -361,7 +420,9 @@ export function StackBuilder({
   const commitItems = (nextItems: StackItem[]) => {
     const normalizedInput = normalizePositions(nextItems);
     const withProfileSync = syncAdvancedGlassProfiles(normalizedInput);
-    const normalized = applyAutoFitSpacerDimensions(withProfileSync, project.cadDefaults);
+    const withBarrelAutoFit = applyAutoFitBarrelDimensions(withProfileSync, project.cadDefaults);
+    const withRetainingAutoFit = applyAutoFitRetainingRingDimensions(withBarrelAutoFit, project.cadDefaults);
+    const normalized = applyAutoFitSpacerDimensions(withRetainingAutoFit, project.cadDefaults);
     onProjectChange({
       ...project,
       updatedAt: new Date().toISOString(),
@@ -371,7 +432,9 @@ export function StackBuilder({
 
   useEffect(() => {
     const withProfileSync = syncAdvancedGlassProfiles(orderedItems);
-    const adjusted = applyAutoFitSpacerDimensions(withProfileSync, project.cadDefaults);
+    const withBarrelAutoFit = applyAutoFitBarrelDimensions(withProfileSync, project.cadDefaults);
+    const withRetainingAutoFit = applyAutoFitRetainingRingDimensions(withBarrelAutoFit, project.cadDefaults);
+    const adjusted = applyAutoFitSpacerDimensions(withRetainingAutoFit, project.cadDefaults);
     const changed = adjusted.some((item, index) => JSON.stringify(item) !== JSON.stringify(orderedItems[index]));
     if (changed) {
       commitItems(adjusted);
@@ -510,18 +573,44 @@ export function StackBuilder({
   };
 
   const autoFitSpacer = (id: string) => {
-    const index = orderedItems.findIndex((item) => item.id === id);
+    const withBarrelAutoFit = applyAutoFitBarrelDimensions(orderedItems, project.cadDefaults);
+    const index = withBarrelAutoFit.findIndex((item) => item.id === id);
     if (index < 0) return;
-    const target = orderedItems[index];
+    const target = withBarrelAutoFit[index];
     if (target.type !== "spacer") return;
-    const auto = deriveSpacerRingDimensions(orderedItems, project.cadDefaults, index);
+    const auto = deriveSpacerRingDimensions(withBarrelAutoFit, project.cadDefaults, index);
     updateTypedItem(id, "spacer", (entry) => ({ ...entry, ...auto }));
   };
 
+  const autoFitBarrel = (id: string) => {
+    const target = orderedItems.find((item) => item.id === id);
+    if (!target || target.type !== "barrel") return;
+    const auto = deriveBarrelDimensionsFromStack(orderedItems, project.cadDefaults);
+    updateTypedItem(id, "barrel", (entry) => ({
+      ...entry,
+      ...auto
+    }));
+  };
+
+  const autoFitRetainingRing = (id: string) => {
+    const withBarrelAutoFit = applyAutoFitBarrelDimensions(orderedItems, project.cadDefaults);
+    const index = withBarrelAutoFit.findIndex((item) => item.id === id);
+    if (index < 0) return;
+    const target = withBarrelAutoFit[index];
+    if (target.type !== "retaining_ring") return;
+    const auto = deriveRetainingRingDimensions(withBarrelAutoFit, project.cadDefaults, index);
+    updateTypedItem(id, "retaining_ring", (entry) => ({
+      ...entry,
+      ...auto
+    }));
+  };
+
   const autoFitAllSpacers = () => {
-    const adjusted = orderedItems.map((item, index) => {
+    const withBarrelAutoFit = applyAutoFitBarrelDimensions(orderedItems, project.cadDefaults);
+    const withRetainingAutoFit = applyAutoFitRetainingRingDimensions(withBarrelAutoFit, project.cadDefaults);
+    const adjusted = withRetainingAutoFit.map((item, index) => {
       if (item.type !== "spacer") return item;
-      const auto = deriveSpacerRingDimensions(orderedItems, project.cadDefaults, index);
+      const auto = deriveSpacerRingDimensions(withRetainingAutoFit, project.cadDefaults, index);
       return { ...item, ...auto };
     });
     commitItems(adjusted);
@@ -532,7 +621,7 @@ export function StackBuilder({
       <AddStackItemModal onAdd={addItem} />
       <div className="flex justify-end">
         <Button variant="ghost" onClick={autoFitAllSpacers} className="text-xs">
-          Auto-fit all spacer rings to barrel
+          Auto-fit barrel + spacer + retaining rings
         </Button>
       </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[360px_1fr_360px]">
@@ -1117,10 +1206,33 @@ export function StackBuilder({
 
               {selectedItem.type === "barrel" && (
                 <>
+                  <label className="flex items-center gap-2 text-sm text-labMuted">
+                    <input
+                      type="checkbox"
+                      checked={selectedItem.autoFitToStack !== false}
+                      onChange={(event) =>
+                        updateTypedItem(selectedItem.id, "barrel", (entry) => ({
+                          ...entry,
+                          autoFitToStack: event.target.checked
+                        }))
+                      }
+                    />
+                    Auto-fit to largest stack element (recommended)
+                  </label>
+                  {selectedItem.autoFitToStack !== false && (
+                    <Button
+                      variant="ghost"
+                      className="w-full text-xs"
+                      onClick={() => autoFitBarrel(selectedItem.id)}
+                    >
+                      Recalculate barrel auto-fit now
+                    </Button>
+                  )}
                   <NumberInput
                     label="Inner diameter (mm)"
                     value={selectedItem.innerDiameterMm}
                     min={0}
+                    disabled={selectedItem.autoFitToStack !== false}
                     onChange={(event) =>
                       updateTypedItem(selectedItem.id, "barrel", (entry) => ({
                         ...entry,
@@ -1132,6 +1244,7 @@ export function StackBuilder({
                     label="Outer diameter (mm)"
                     value={selectedItem.outerDiameterMm}
                     min={0}
+                    disabled={selectedItem.autoFitToStack !== false}
                     onChange={(event) =>
                       updateTypedItem(selectedItem.id, "barrel", (entry) => ({
                         ...entry,
@@ -1155,10 +1268,33 @@ export function StackBuilder({
 
               {selectedItem.type === "retaining_ring" && (
                 <>
+                  <label className="flex items-center gap-2 text-sm text-labMuted">
+                    <input
+                      type="checkbox"
+                      checked={selectedItem.autoFitToBarrel !== false}
+                      onChange={(event) =>
+                        updateTypedItem(selectedItem.id, "retaining_ring", (entry) => ({
+                          ...entry,
+                          autoFitToBarrel: event.target.checked
+                        }))
+                      }
+                    />
+                    Auto-fit diameters to barrel (recommended)
+                  </label>
+                  {selectedItem.autoFitToBarrel !== false && (
+                    <Button
+                      variant="ghost"
+                      className="w-full text-xs"
+                      onClick={() => autoFitRetainingRing(selectedItem.id)}
+                    >
+                      Recalculate auto-fit now
+                    </Button>
+                  )}
                   <NumberInput
                     label="Inner diameter (mm)"
                     value={selectedItem.innerDiameterMm}
                     min={0}
+                    disabled={selectedItem.autoFitToBarrel !== false}
                     onChange={(event) =>
                       updateTypedItem(selectedItem.id, "retaining_ring", (entry) => ({
                         ...entry,
@@ -1170,6 +1306,7 @@ export function StackBuilder({
                     label="Outer diameter (mm)"
                     value={selectedItem.outerDiameterMm}
                     min={0}
+                    disabled={selectedItem.autoFitToBarrel !== false}
                     onChange={(event) =>
                       updateTypedItem(selectedItem.id, "retaining_ring", (entry) => ({
                         ...entry,

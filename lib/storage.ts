@@ -52,6 +52,18 @@ export function normalizeProject(project: LensProject): LensProject {
     stackItems: [...(project.stackItems ?? [])]
       .map((item, index) => {
         const base = { ...item, positionIndex: index };
+        if (base.type === "barrel") {
+          return {
+            ...base,
+            autoFitToStack: base.autoFitToStack ?? true
+          };
+        }
+        if (base.type === "retaining_ring") {
+          return {
+            ...base,
+            autoFitToBarrel: base.autoFitToBarrel ?? true
+          };
+        }
         if (base.type !== "glass") return base;
         return {
           ...base,
