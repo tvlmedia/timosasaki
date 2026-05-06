@@ -1,0 +1,107 @@
+export type StackItemType =
+  | "glass"
+  | "spacer"
+  | "iris"
+  | "diffusion"
+  | "mount"
+  | "barrel"
+  | "retaining_ring"
+  | "custom";
+
+export type BaseStackItem = {
+  id: string;
+  name: string;
+  type: StackItemType;
+  positionIndex: number;
+  locked?: boolean;
+  notes?: string;
+};
+
+export type GlassItem = BaseStackItem & {
+  type: "glass";
+  diameterMm: number;
+  thicknessMm: number;
+  edgeThicknessMm?: number;
+  clearApertureMm?: number;
+  flipped: boolean;
+  coatingColor?: string;
+  glassUnknown?: boolean;
+  movesWithFocus?: boolean;
+  decenterMm?: number;
+  tiltDeg?: number;
+  measuredConfidence?: "low" | "medium" | "high";
+};
+
+export type SpacerItem = BaseStackItem & {
+  type: "spacer";
+  innerDiameterMm: number;
+  outerDiameterMm: number;
+  thicknessMm: number;
+  hasAntiReflectionGrooves?: boolean;
+};
+
+export type IrisItem = BaseStackItem & {
+  type: "iris";
+  diskDiameterMm: number;
+  apertureDiameterMm: number;
+  thicknessMm: number;
+  isOval: boolean;
+  ovalWidthMm?: number;
+  ovalHeightMm?: number;
+  tabEnabled?: boolean;
+  tabWidthMm?: number;
+  tabLengthMm?: number;
+};
+
+export type DiffusionItem = BaseStackItem & {
+  type: "diffusion";
+  diskDiameterMm: number;
+  clearCenterDiameterMm: number;
+  diffusionOuterDiameterMm: number;
+  thicknessMm: number;
+  strengthLabel?: "subtle" | "medium" | "strong" | "experimental";
+  positionNotes?: string;
+};
+
+export type MountItem = BaseStackItem & {
+  type: "mount";
+  mountType: "PL" | "LPL" | "EF" | "E" | "M42" | "CUSTOM";
+  flangeDistanceMm?: number;
+  innerClearanceMm?: number;
+  notes?: string;
+};
+
+export type BarrelItem = BaseStackItem & {
+  type: "barrel";
+  innerDiameterMm: number;
+  outerDiameterMm: number;
+  lengthMm: number;
+  hasIrisSlot?: boolean;
+  hasDiffusionSlot?: boolean;
+  screwHoleCount?: number;
+};
+
+export type RetainingRingItem = BaseStackItem & {
+  type: "retaining_ring";
+  innerDiameterMm: number;
+  outerDiameterMm: number;
+  thicknessMm: number;
+  notchCount?: number;
+};
+
+export type CustomItem = BaseStackItem & {
+  type: "custom";
+  lengthMm?: number;
+  diameterMm?: number;
+  customLabel?: string;
+};
+
+export type StackItem =
+  | GlassItem
+  | SpacerItem
+  | IrisItem
+  | DiffusionItem
+  | MountItem
+  | BarrelItem
+  | RetainingRingItem
+  | CustomItem;
