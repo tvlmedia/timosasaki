@@ -192,6 +192,17 @@ export function StackBuilder({
     commitItems(orderedItems.map((item) => (item.id === id ? updater(item) : item)));
   };
 
+  const updateTypedItem = <T extends StackItem["type"]>(
+    id: string,
+    type: T,
+    updater: (item: Extract<StackItem, { type: T }>) => Extract<StackItem, { type: T }>
+  ) => {
+    updateItem(id, (item) => {
+      if (item.type !== type) return item;
+      return updater(item as Extract<StackItem, { type: T }>);
+    });
+  };
+
   const moveItem = (id: string, direction: -1 | 1) => {
     const index = orderedItems.findIndex((item) => item.id === id);
     const target = index + direction;
@@ -293,7 +304,7 @@ export function StackBuilder({
                     value={selectedItem.diameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "glass", (entry) => ({
                         ...entry,
                         diameterMm: Number(event.target.value)
                       }))
@@ -304,7 +315,7 @@ export function StackBuilder({
                     value={selectedItem.thicknessMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "glass", (entry) => ({
                         ...entry,
                         thicknessMm: Number(event.target.value)
                       }))
@@ -315,7 +326,7 @@ export function StackBuilder({
                     value={selectedItem.clearApertureMm ?? ""}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "glass", (entry) => ({
                         ...entry,
                         clearApertureMm: event.target.value ? Number(event.target.value) : undefined
                       }))
@@ -326,7 +337,7 @@ export function StackBuilder({
                       type="checkbox"
                       checked={selectedItem.flipped}
                       onChange={(event) =>
-                        updateItem(selectedItem.id, (entry) => ({
+                        updateTypedItem(selectedItem.id, "glass", (entry) => ({
                           ...entry,
                           flipped: event.target.checked
                         }))
@@ -344,7 +355,7 @@ export function StackBuilder({
                     value={selectedItem.innerDiameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "spacer", (entry) => ({
                         ...entry,
                         innerDiameterMm: Number(event.target.value)
                       }))
@@ -355,7 +366,7 @@ export function StackBuilder({
                     value={selectedItem.outerDiameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "spacer", (entry) => ({
                         ...entry,
                         outerDiameterMm: Number(event.target.value)
                       }))
@@ -366,7 +377,7 @@ export function StackBuilder({
                     value={selectedItem.thicknessMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "spacer", (entry) => ({
                         ...entry,
                         thicknessMm: Number(event.target.value)
                       }))
@@ -377,7 +388,7 @@ export function StackBuilder({
                       type="checkbox"
                       checked={Boolean(selectedItem.hasAntiReflectionGrooves)}
                       onChange={(event) =>
-                        updateItem(selectedItem.id, (entry) => ({
+                        updateTypedItem(selectedItem.id, "spacer", (entry) => ({
                           ...entry,
                           hasAntiReflectionGrooves: event.target.checked
                         }))
@@ -395,7 +406,7 @@ export function StackBuilder({
                     value={selectedItem.diskDiameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "iris", (entry) => ({
                         ...entry,
                         diskDiameterMm: Number(event.target.value)
                       }))
@@ -406,7 +417,7 @@ export function StackBuilder({
                     value={selectedItem.apertureDiameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "iris", (entry) => ({
                         ...entry,
                         apertureDiameterMm: Number(event.target.value)
                       }))
@@ -417,7 +428,7 @@ export function StackBuilder({
                     value={selectedItem.thicknessMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "iris", (entry) => ({
                         ...entry,
                         thicknessMm: Number(event.target.value)
                       }))
@@ -428,7 +439,7 @@ export function StackBuilder({
                       type="checkbox"
                       checked={selectedItem.isOval}
                       onChange={(event) =>
-                        updateItem(selectedItem.id, (entry) => ({
+                        updateTypedItem(selectedItem.id, "iris", (entry) => ({
                           ...entry,
                           isOval: event.target.checked
                         }))
@@ -443,7 +454,7 @@ export function StackBuilder({
                         value={selectedItem.ovalWidthMm ?? ""}
                         min={0}
                         onChange={(event) =>
-                          updateItem(selectedItem.id, (entry) => ({
+                          updateTypedItem(selectedItem.id, "iris", (entry) => ({
                             ...entry,
                             ovalWidthMm: event.target.value ? Number(event.target.value) : undefined
                           }))
@@ -454,7 +465,7 @@ export function StackBuilder({
                         value={selectedItem.ovalHeightMm ?? ""}
                         min={0}
                         onChange={(event) =>
-                          updateItem(selectedItem.id, (entry) => ({
+                          updateTypedItem(selectedItem.id, "iris", (entry) => ({
                             ...entry,
                             ovalHeightMm: event.target.value ? Number(event.target.value) : undefined
                           }))
@@ -467,7 +478,7 @@ export function StackBuilder({
                       type="checkbox"
                       checked={Boolean(selectedItem.tabEnabled)}
                       onChange={(event) =>
-                        updateItem(selectedItem.id, (entry) => ({
+                        updateTypedItem(selectedItem.id, "iris", (entry) => ({
                           ...entry,
                           tabEnabled: event.target.checked
                         }))
@@ -482,7 +493,7 @@ export function StackBuilder({
                         value={selectedItem.tabWidthMm ?? ""}
                         min={0}
                         onChange={(event) =>
-                          updateItem(selectedItem.id, (entry) => ({
+                          updateTypedItem(selectedItem.id, "iris", (entry) => ({
                             ...entry,
                             tabWidthMm: event.target.value ? Number(event.target.value) : undefined
                           }))
@@ -493,7 +504,7 @@ export function StackBuilder({
                         value={selectedItem.tabLengthMm ?? ""}
                         min={0}
                         onChange={(event) =>
-                          updateItem(selectedItem.id, (entry) => ({
+                          updateTypedItem(selectedItem.id, "iris", (entry) => ({
                             ...entry,
                             tabLengthMm: event.target.value ? Number(event.target.value) : undefined
                           }))
@@ -511,7 +522,7 @@ export function StackBuilder({
                     value={selectedItem.diskDiameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "diffusion", (entry) => ({
                         ...entry,
                         diskDiameterMm: Number(event.target.value)
                       }))
@@ -522,7 +533,7 @@ export function StackBuilder({
                     value={selectedItem.clearCenterDiameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "diffusion", (entry) => ({
                         ...entry,
                         clearCenterDiameterMm: Number(event.target.value)
                       }))
@@ -533,7 +544,7 @@ export function StackBuilder({
                     value={selectedItem.diffusionOuterDiameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "diffusion", (entry) => ({
                         ...entry,
                         diffusionOuterDiameterMm: Number(event.target.value)
                       }))
@@ -544,7 +555,7 @@ export function StackBuilder({
                     value={selectedItem.thicknessMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "diffusion", (entry) => ({
                         ...entry,
                         thicknessMm: Number(event.target.value)
                       }))
@@ -559,7 +570,7 @@ export function StackBuilder({
                     label="Mount type"
                     value={selectedItem.mountType}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "mount", (entry) => ({
                         ...entry,
                         mountType: event.target.value as typeof selectedItem.mountType
                       }))
@@ -577,7 +588,7 @@ export function StackBuilder({
                     value={selectedItem.flangeDistanceMm ?? ""}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "mount", (entry) => ({
                         ...entry,
                         flangeDistanceMm: event.target.value ? Number(event.target.value) : undefined
                       }))
@@ -588,7 +599,7 @@ export function StackBuilder({
                     value={selectedItem.innerClearanceMm ?? ""}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "mount", (entry) => ({
                         ...entry,
                         innerClearanceMm: event.target.value ? Number(event.target.value) : undefined
                       }))
@@ -604,7 +615,7 @@ export function StackBuilder({
                     value={selectedItem.innerDiameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "barrel", (entry) => ({
                         ...entry,
                         innerDiameterMm: Number(event.target.value)
                       }))
@@ -615,7 +626,7 @@ export function StackBuilder({
                     value={selectedItem.outerDiameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "barrel", (entry) => ({
                         ...entry,
                         outerDiameterMm: Number(event.target.value)
                       }))
@@ -626,7 +637,7 @@ export function StackBuilder({
                     value={selectedItem.lengthMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "barrel", (entry) => ({
                         ...entry,
                         lengthMm: Number(event.target.value)
                       }))
@@ -642,7 +653,7 @@ export function StackBuilder({
                     value={selectedItem.innerDiameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "retaining_ring", (entry) => ({
                         ...entry,
                         innerDiameterMm: Number(event.target.value)
                       }))
@@ -653,7 +664,7 @@ export function StackBuilder({
                     value={selectedItem.outerDiameterMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "retaining_ring", (entry) => ({
                         ...entry,
                         outerDiameterMm: Number(event.target.value)
                       }))
@@ -664,7 +675,7 @@ export function StackBuilder({
                     value={selectedItem.thicknessMm}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "retaining_ring", (entry) => ({
                         ...entry,
                         thicknessMm: Number(event.target.value)
                       }))
@@ -675,7 +686,7 @@ export function StackBuilder({
                     value={selectedItem.notchCount ?? ""}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "retaining_ring", (entry) => ({
                         ...entry,
                         notchCount: event.target.value ? Number(event.target.value) : undefined
                       }))
@@ -691,7 +702,7 @@ export function StackBuilder({
                     value={selectedItem.lengthMm ?? ""}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "custom", (entry) => ({
                         ...entry,
                         lengthMm: event.target.value ? Number(event.target.value) : undefined
                       }))
@@ -702,7 +713,7 @@ export function StackBuilder({
                     value={selectedItem.diameterMm ?? ""}
                     min={0}
                     onChange={(event) =>
-                      updateItem(selectedItem.id, (entry) => ({
+                      updateTypedItem(selectedItem.id, "custom", (entry) => ({
                         ...entry,
                         diameterMm: event.target.value ? Number(event.target.value) : undefined
                       }))
