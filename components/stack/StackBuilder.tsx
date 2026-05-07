@@ -647,16 +647,18 @@ export function StackBuilder({
         };
       }
 
-      const largeDiameter = toPositive(entry.largeDiameterMm) > 0 ? entry.largeDiameterMm : entry.diameterMm;
+      const largeDiameter = toPositive(entry.largeDiameterMm) > 0 ? entry.largeDiameterMm ?? entry.diameterMm : entry.diameterMm;
       const smallDiameter =
-        toPositive(entry.smallDiameterMm) > 0 ? entry.smallDiameterMm : Number(Math.max(0.1, entry.diameterMm - 2).toFixed(2));
+        toPositive(entry.smallDiameterMm) > 0
+          ? entry.smallDiameterMm ?? Math.max(0.1, entry.diameterMm - 2)
+          : Number(Math.max(0.1, entry.diameterMm - 2).toFixed(2));
       const largeSectionThickness =
         toPositive(entry.largeSectionThicknessMm) > 0
-          ? entry.largeSectionThicknessMm
+          ? entry.largeSectionThicknessMm ?? entry.thicknessMm / 2
           : Number((entry.thicknessMm / 2).toFixed(2));
       const smallSectionThickness =
         toPositive(entry.smallSectionThicknessMm) > 0
-          ? entry.smallSectionThicknessMm
+          ? entry.smallSectionThicknessMm ?? Math.max(0.1, entry.thicknessMm - largeSectionThickness)
           : Number((entry.thicknessMm - largeSectionThickness).toFixed(2));
 
       return {
