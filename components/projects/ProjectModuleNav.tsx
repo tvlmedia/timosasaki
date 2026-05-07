@@ -8,18 +8,26 @@ import {
   projectCadHref,
   projectDetailHref,
   projectExperimentsHref,
+  projectFocusTravelHref,
   projectMeasurementsHref,
   projectStackHref
 } from "@/lib/routes";
 import { importProjectJson, saveProject } from "@/lib/storage";
 
-type ProjectModule = "project" | "measurements" | "stack" | "cad" | "experiments";
+type ProjectModule =
+  | "project"
+  | "measurements"
+  | "stack"
+  | "cad"
+  | "focus_travel"
+  | "experiments";
 
 const links: Array<{ key: ProjectModule; label: string; href: (id: string) => string }> = [
   { key: "project", label: "Project", href: projectDetailHref },
   { key: "measurements", label: "Measurements", href: projectMeasurementsHref },
   { key: "stack", label: "Stack", href: projectStackHref },
   { key: "cad", label: "CAD", href: projectCadHref },
+  { key: "focus_travel", label: "Focus Travel", href: projectFocusTravelHref },
   { key: "experiments", label: "Experiments", href: projectExperimentsHref }
 ];
 
