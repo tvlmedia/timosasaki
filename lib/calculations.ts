@@ -62,7 +62,7 @@ export function getItemAxialLength(item: StackItem): number {
     case "mount":
       return 0;
     case "barrel":
-      return toPositive(item.lengthMm);
+      return item.contributesToOpticalStackLength ? toPositive(item.lengthMm) : 0;
     case "retaining_ring":
       return toPositive(item.thicknessMm);
     case "custom":

@@ -3,9 +3,12 @@
 import { type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/common/Button";
 import { Input } from "@/components/common/Input";
+import { BaselineStackWizard } from "@/components/measurements/BaselineStackWizard";
 import { NumberInput } from "@/components/common/NumberInput";
 import { Select } from "@/components/common/Select";
-import { createId } from "@/lib/ids";
+import { projectStackHref } from "@/lib/routes";
+import { createId, safeFileName } from "@/lib/ids";
+import { downloadTextFile } from "@/lib/storage";
 import type {
   CalibrationReferenceGeometry,
   CalibrationReferenceType,
@@ -15,6 +18,7 @@ import type {
   MeasurementAnnotation,
   MeasurementFields,
   MeasurementItemType,
+  OriginalLensBaseline,
   OpticalGroupType,
   OpticalSubElement,
   OpticalPowerGuess,
@@ -407,7 +411,134 @@ function normalizeStackPositions(items: StackItem[]): StackItem[] {
   return items.map((item, index) => ({ ...item, positionIndex: index }));
 }
 
-function mapAnnotationToStackItem(annotation: MeasurementAnnotation): StackItem | null {
+function getBaselineComponentIdMap(baseline?: OriginalLensBaseline): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const component of baseline?.physicalComponents ?? []) {
+    if (component.sourceAnnotationId) {
+      map.set(component.sourceAnnotationId, component.id);
+    }
+  }
+  return map;
+}
+
+function buildSteppedProfileSegmentsFromMeasurementFields(
+  fields: MeasurementFields
+): Array<{ id: string; name?: string; diameterMm: number; depthMm: number }> {
+  const explicitSegments = (fields.steppedProfileSegments ?? [])
+    .map((segment, index) => ({
+      id: segment.id || createId("profile"),
+      name: segment.name?.trim() || `Segment ${index + 1}`,
+      diameterMm: toPositive(segment.diameterMm),
+      depthMm: toPositive(segment.depthMm)
+    }))
+    .filter((segment) => segment.diameterMm > 0 && segment.depthMm > 0);
+
+  const largeDiameterMm = toPositive(fields.largeDiameterMm);
+  const smallDiameterMm = toPositive(fields.smallDiameterMm);
+  const largeSectionThicknessMm = toPositive(fields.largeSectionThicknessMm);
+  const smallSectionThicknessMm = toPositive(fields.smallSectionThicknessMm);
+  if (
+    largeDiameterMm <= 0 ||
+    smallDiameterMm <= 0 ||
+    largeSectionThicknessMm <= 0 ||
+    smallSectionThicknessMm <= 0
+  ) {
+    if (fields.hasSteppedProfile) {
+      return explicitSegments;
+    }
+    return explicitSegments;
+  }
+
+  const generatedFromSteppedFields =
+    fields.stepDirection === "large_side_front"
+      ? [
+          {
+            id: createId("profile"),
+            name: "Large section (front)",
+            diameterMm: largeDiameterMm,
+            depthMm: largeSectionThicknessMm
+          },
+          {
+            id: createId("profile"),
+            name: "Small section (rear)",
+            diameterMm: smallDiameterMm,
+            depthMm: smallSectionThicknessMm
+          }
+        ]
+      : [
+          {
+            id: createId("profile"),
+            name: "Small section (front)",
+            diameterMm: smallDiameterMm,
+            depthMm: smallSectionThicknessMm
+          },
+          {
+            id: createId("profile"),
+            name: "Large section (rear)",
+            diameterMm: largeDiameterMm,
+            depthMm: largeSectionThicknessMm
+          }
+        ];
+
+  if (!fields.hasSteppedProfile) {
+    return explicitSegments.length > 0 ? explicitSegments : generatedFromSteppedFields;
+  }
+
+  // For stepped items, prefer real stepped-field geometry over stale single-segment profile residue.
+  if (explicitSegments.length >= 2) return explicitSegments;
+  return generatedFromSteppedFields;
+}
+
+function findBestLinkedStackIndex(
+  stackItems: StackItem[],
+  annotation: MeasurementAnnotation,
+  mappedType: StackItem["type"]
+): number {
+  const normalized = normalizeStackPositions(stackItems);
+  const linkedIndex = annotation.linkedStackItemId
+    ? normalized.findIndex((item) => item.id === annotation.linkedStackItemId)
+    : -1;
+  if (linkedIndex >= 0) {
+    const linked = normalized[linkedIndex];
+    const label = annotation.label.trim();
+    const sourceMatches = linked.sourceMeasurementAnnotationId === annotation.id;
+    const nameMatches = Boolean(label) && linked.name.trim() === label;
+    const sourceEmpty = !linked.sourceMeasurementAnnotationId;
+    if (linked.type === mappedType && (sourceMatches || (sourceEmpty && nameMatches))) {
+      return linkedIndex;
+    }
+  }
+
+  const sourceMatches = normalized
+    .map((item, index) => ({ item, index }))
+    .filter(
+      ({ item }) =>
+        item.sourceMeasurementAnnotationId === annotation.id &&
+        item.type === mappedType
+    );
+
+  if (sourceMatches.length === 0) return -1;
+  if (sourceMatches.length === 1) return sourceMatches[0].index;
+
+  const trimmedLabel = annotation.label.trim();
+  if (trimmedLabel) {
+    const exactName = sourceMatches.find(({ item }) => item.name.trim() === trimmedLabel);
+    if (exactName) return exactName.index;
+  }
+
+  const sameOpticalType = sourceMatches.find(({ item }) => {
+    if (mappedType !== "glass" || annotation.itemType !== "glass") return false;
+    return item.opticalType === "GLASS";
+  });
+  if (sameOpticalType) return sameOpticalType.index;
+
+  return sourceMatches[0].index;
+}
+
+function mapAnnotationToStackItem(
+  annotation: MeasurementAnnotation,
+  options?: { sourceBaselineComponentId?: string }
+): StackItem | null {
   const fields = annotation.fields;
   const name = annotation.label.trim() || "Measured item";
 
@@ -417,6 +548,7 @@ function mapAnnotationToStackItem(annotation: MeasurementAnnotation): StackItem 
     }
 
     const physicalComponentMode = getPhysicalMode(fields);
+    const steppedSegments = buildSteppedProfileSegmentsFromMeasurementFields(fields);
     const normalizedSubElements =
       physicalComponentMode === "optical_group"
         ? (fields.opticalSubElements ?? [])
@@ -439,8 +571,12 @@ function mapAnnotationToStackItem(annotation: MeasurementAnnotation): StackItem 
       opticalType: "GLASS",
       name,
       positionIndex: 0,
+      sourceMeasurementAnnotationId: annotation.id,
+      sourceBaselineComponentId: options?.sourceBaselineComponentId,
       diameterMm: fields.diameterMm,
       thicknessMm: fields.thicknessMm,
+      advancedProfileEnabled: steppedSegments.length > 0,
+      profileSegments: steppedSegments.length > 0 ? steppedSegments : undefined,
       edgeThicknessMm: fields.edgeThicknessMm,
       clearApertureMm: fields.clearApertureMm,
       flipped: fields.orientation === "flipped",
@@ -488,6 +624,8 @@ function mapAnnotationToStackItem(annotation: MeasurementAnnotation): StackItem 
       opticalType: "SPACER",
       name,
       positionIndex: 0,
+      sourceMeasurementAnnotationId: annotation.id,
+      sourceBaselineComponentId: options?.sourceBaselineComponentId,
       innerDiameterMm: fields.innerDiameterMm,
       outerDiameterMm: fields.outerDiameterMm,
       thicknessMm: fields.thicknessMm,
@@ -517,6 +655,8 @@ function mapAnnotationToStackItem(annotation: MeasurementAnnotation): StackItem 
       opticalType: "BARREL",
       name,
       positionIndex: 0,
+      sourceMeasurementAnnotationId: annotation.id,
+      sourceBaselineComponentId: options?.sourceBaselineComponentId,
       innerDiameterMm: fields.innerDiameterMm,
       outerDiameterMm: fields.outerDiameterMm,
       lengthMm: fields.lengthMm,
@@ -543,6 +683,8 @@ function mapAnnotationToStackItem(annotation: MeasurementAnnotation): StackItem 
       opticalType: "IRIS",
       name,
       positionIndex: 0,
+      sourceMeasurementAnnotationId: annotation.id,
+      sourceBaselineComponentId: options?.sourceBaselineComponentId,
       diskDiameterMm: fields.diskDiameterMm,
       apertureDiameterMm: fields.apertureDiameterMm,
       thicknessMm: fields.thicknessMm,
@@ -557,9 +699,150 @@ function mapAnnotationToStackItem(annotation: MeasurementAnnotation): StackItem 
     opticalType: "CUSTOM",
     name,
     positionIndex: 0,
+    sourceMeasurementAnnotationId: annotation.id,
+    sourceBaselineComponentId: options?.sourceBaselineComponentId,
     lengthMm: fields.lengthMm,
     diameterMm: fields.outerDiameterMm ?? fields.diameterMm,
     notes: fields.notes
+  };
+}
+
+function syncLinkedStackItemFromAnnotation(
+  stackItems: StackItem[],
+  annotation: MeasurementAnnotation,
+  sourceBaselineComponentId?: string
+): StackItem[] {
+  const mapped = mapAnnotationToStackItem(annotation, { sourceBaselineComponentId });
+  if (!mapped) return stackItems;
+
+  const normalized = normalizeStackPositions(stackItems);
+  const targetIndex = findBestLinkedStackIndex(normalized, annotation, mapped.type);
+  if (targetIndex < 0) return normalized;
+
+  const existing = normalized[targetIndex];
+  if (existing.type !== mapped.type) return normalized;
+
+  return normalized.map((item, index) =>
+    index === targetIndex
+      ? {
+          ...mapped,
+          id: existing.id,
+          locked: existing.locked,
+          positionIndex: existing.positionIndex
+        }
+      : item
+  );
+}
+
+function annotationCenterX(annotation: MeasurementAnnotation): number {
+  return annotation.x + annotation.width / 2;
+}
+
+function toPositive(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
+  return value;
+}
+
+function createQuickBaselineFromMeasurements(project: LensProject): OriginalLensBaseline {
+  const now = new Date().toISOString();
+  const glassAnnotations = [...project.measurements.annotations]
+    .filter((annotation) => annotation.itemType === "glass")
+    .sort((a, b) => annotationCenterX(a) - annotationCenterX(b));
+  const spacerAnnotations = [...project.measurements.annotations]
+    .filter((annotation) => annotation.itemType === "spacer_ring")
+    .sort((a, b) => annotationCenterX(a) - annotationCenterX(b));
+  const irisAnnotation = project.measurements.annotations.find((annotation) => annotation.itemType === "iris_disk");
+  const housingAnnotation = project.measurements.annotations.find((annotation) => annotation.itemType === "housing_barrel");
+
+  const physicalComponents = glassAnnotations.map((annotation) => ({
+    id: createId("baseline_component"),
+    sourceAnnotationId: annotation.id,
+    label: annotation.label,
+    componentMode: annotation.fields.physicalComponentMode ?? "single_element",
+    elementId: annotation.fields.elementId?.trim() || undefined,
+    role: annotation.fields.role?.trim() || undefined,
+    diameterMm: toPositive(annotation.fields.diameterMm) > 0 ? annotation.fields.diameterMm : undefined,
+    thicknessMm: toPositive(annotation.fields.thicknessMm) > 0 ? annotation.fields.thicknessMm : undefined,
+    clearApertureMm: toPositive(annotation.fields.clearApertureMm) > 0
+      ? annotation.fields.clearApertureMm
+      : undefined,
+    groupType: annotation.fields.groupType,
+    opticalSubElements: annotation.fields.opticalSubElements ?? [],
+    elementOverallType: annotation.fields.elementOverallType,
+    frontSurfaceShape: annotation.fields.frontSurfaceShape,
+    rearSurfaceShape: annotation.fields.rearSurfaceShape,
+    opticalPowerGuess: annotation.fields.opticalPowerGuess,
+    hasSteppedProfile: Boolean(annotation.fields.hasSteppedProfile),
+    largeDiameterMm: toPositive(annotation.fields.largeDiameterMm) > 0
+      ? annotation.fields.largeDiameterMm
+      : undefined,
+    smallDiameterMm: toPositive(annotation.fields.smallDiameterMm) > 0
+      ? annotation.fields.smallDiameterMm
+      : undefined,
+    largeSectionThicknessMm: toPositive(annotation.fields.largeSectionThicknessMm) > 0
+      ? annotation.fields.largeSectionThicknessMm
+      : undefined,
+    smallSectionThicknessMm: toPositive(annotation.fields.smallSectionThicknessMm) > 0
+      ? annotation.fields.smallSectionThicknessMm
+      : undefined,
+    stepDirection: annotation.fields.stepDirection,
+    coatingColor: annotation.fields.coatingColor?.trim() || undefined,
+    condition: annotation.fields.condition?.trim() || undefined,
+    orientation: annotation.fields.orientation,
+    notes: annotation.fields.notes?.trim() || undefined
+  }));
+
+  const airGaps: OriginalLensBaseline["airGaps"] = spacerAnnotations.map((annotation, index) => ({
+    id: createId("baseline_gap"),
+    label: annotation.label || `Spacer / Air Gap Ring ${index + 1}`,
+    thicknessMm: Math.max(0, annotation.fields.thicknessMm ?? 1),
+    innerDiameterMm: Math.max(0, annotation.fields.innerDiameterMm ?? 20),
+    outerDiameterMm: Math.max(0, annotation.fields.outerDiameterMm ?? 38),
+    notes: annotation.fields.notes?.trim() || undefined
+  }));
+
+  return {
+    id: project.originalLensBaseline?.id ?? createId("baseline"),
+    name:
+      project.originalLensBaseline?.name ??
+      `${project.donorLens?.trim() || project.name.trim()} Original Lens Baseline`,
+    donorLensName: project.donorLens,
+    sourceMeasurementPhotoIds: project.measurements.photoUpdatedAt ? [project.measurements.photoUpdatedAt] : [],
+    createdAt: project.originalLensBaseline?.createdAt ?? now,
+    updatedAt: now,
+    housingLengthMm: toPositive(housingAnnotation?.fields.lengthMm) > 0 ? housingAnnotation?.fields.lengthMm : undefined,
+    originalMount: project.focusTravel?.originalMount ?? "M42",
+    originalFlangeDistanceMm: project.focusTravel?.originalFlangeDistanceMm ?? 45.46,
+    targetMount: project.focusTravel?.targetMount ?? project.targetMount,
+    targetFlangeDistanceMm: project.focusTravel?.targetFlangeDistanceMm,
+    physicalComponents,
+    airGaps,
+    iris: irisAnnotation
+      ? {
+          id: createId("baseline_iris"),
+          label: irisAnnotation.label || "Original iris plane",
+          positionMode: "unknown",
+          apertureDiameterMm: toPositive(irisAnnotation.fields.apertureDiameterMm) > 0
+            ? irisAnnotation.fields.apertureDiameterMm
+            : undefined,
+          diskDiameterMm: toPositive(irisAnnotation.fields.diskDiameterMm) > 0
+            ? irisAnnotation.fields.diskDiameterMm
+            : undefined,
+          thicknessMm: typeof irisAnnotation.fields.thicknessMm === "number"
+            ? irisAnnotation.fields.thicknessMm
+            : 0.1,
+          contributesToStackLength: false,
+          notes: irisAnnotation.fields.notes?.trim() || undefined
+        }
+      : undefined,
+    flangeReference: {
+      referencePointLabel: project.focusTravel?.referencePointLabel ?? "Back of rear group",
+      donorFlangeToReferenceInfinityMm: project.focusTravel?.donorFlangeToReferenceInfinityMm,
+      donorFlangeToReferenceCloseFocusMm: project.focusTravel?.donorFlangeToReferenceCloseFocusMm,
+      infinityOvertravelMm: project.focusTravel?.infinityOvertravelMm ?? 10,
+      closeFocusExtraMarginMm: project.focusTravel?.closeFocusExtraMarginMm ?? 5
+    },
+    notes: project.originalLensBaseline?.notes
   };
 }
 
@@ -593,12 +876,24 @@ export function MeasurementsBoard({
   const [calibrationDraftGeometry, setCalibrationDraftGeometry] = useState<CalibrationReferenceGeometry | null>(null);
   const [calibrationError, setCalibrationError] = useState("");
   const [syncError, setSyncError] = useState("");
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardInitialBaseline, setWizardInitialBaseline] = useState<OriginalLensBaseline | undefined>(
+    project.originalLensBaseline
+  );
+  const [baselineFeedback, setBaselineFeedback] = useState("");
 
   const selectedAnnotation = annotations.find((annotation) => annotation.id === selectedAnnotationId) ?? annotations[0];
   const selectedPhysicalMode =
     selectedAnnotation?.itemType === "glass" ? getPhysicalMode(selectedAnnotation.fields) : "single_element";
   const savedCalibrationGeometry = measurements.calibration?.geometry;
   const canEditGeometry = drawMode === "idle" && !drawingStart;
+  const stackItemById = useMemo(
+    () => new Map(project.stackItems.map((item) => [item.id, item])),
+    [project.stackItems]
+  );
+  const baselineComponentIdByAnnotationId = useMemo(() => {
+    return getBaselineComponentIdMap(project.originalLensBaseline);
+  }, [project.originalLensBaseline?.physicalComponents]);
 
   useEffect(() => {
     if (!selectedAnnotationId && annotations[0]) {
@@ -643,17 +938,36 @@ export function MeasurementsBoard({
 
   const updateSelectedAnnotation = (updater: (annotation: MeasurementAnnotation) => MeasurementAnnotation) => {
     if (!selectedAnnotation) return;
-    patchMeasurements((current) => ({
-      ...current,
-      annotations: current.annotations.map((annotation) =>
+    patchProject((currentProject) => {
+      const now = new Date().toISOString();
+      const nextAnnotations = currentProject.measurements.annotations.map((annotation) =>
         annotation.id === selectedAnnotation.id
           ? {
               ...updater(annotation),
-              updatedAt: new Date().toISOString()
+              updatedAt: now
             }
           : annotation
-      )
-    }));
+      );
+      const updatedAnnotation = nextAnnotations.find((annotation) => annotation.id === selectedAnnotation.id);
+      const baselineMap = getBaselineComponentIdMap(currentProject.originalLensBaseline);
+      const nextStackItems = updatedAnnotation
+        ? syncLinkedStackItemFromAnnotation(
+            currentProject.stackItems,
+            updatedAnnotation,
+            baselineMap.get(updatedAnnotation.id)
+          )
+        : currentProject.stackItems;
+
+      return {
+        ...currentProject,
+        stackItems: nextStackItems,
+        measurements: {
+          ...currentProject.measurements,
+          annotations: nextAnnotations,
+          updatedAt: now
+        }
+      };
+    });
   };
 
   const updateSelectedField = <K extends keyof MeasurementFields>(key: K, value: MeasurementFields[K]) => {
@@ -989,7 +1303,9 @@ export function MeasurementsBoard({
 
   const createOrSyncStackItem = () => {
     if (!selectedAnnotation) return;
-    const mapped = mapAnnotationToStackItem(selectedAnnotation);
+    const mapped = mapAnnotationToStackItem(selectedAnnotation, {
+      sourceBaselineComponentId: baselineComponentIdByAnnotationId.get(selectedAnnotation.id)
+    });
 
     if (!mapped) {
       setSyncError(
@@ -999,16 +1315,15 @@ export function MeasurementsBoard({
     }
 
     const currentItems = normalizeStackPositions(project.stackItems);
-    const linkedId = selectedAnnotation.linkedStackItemId;
-    const linkedIndex = linkedId ? currentItems.findIndex((item) => item.id === linkedId) : -1;
+    const targetIndex = findBestLinkedStackIndex(currentItems, selectedAnnotation, mapped.type);
 
     let nextItems = currentItems;
-    let finalLinkedId = linkedId;
+    let finalLinkedId = selectedAnnotation.linkedStackItemId;
 
-    if (linkedIndex >= 0 && currentItems[linkedIndex].type === mapped.type) {
-      const existing = currentItems[linkedIndex];
+    if (targetIndex >= 0 && currentItems[targetIndex].type === mapped.type) {
+      const existing = currentItems[targetIndex];
       nextItems = currentItems.map((item, index) =>
-        index === linkedIndex
+        index === targetIndex
           ? {
               ...mapped,
               id: existing.id,
@@ -1050,6 +1365,86 @@ export function MeasurementsBoard({
     setSyncError("");
   };
 
+  const saveOriginalLensBaseline = () => {
+    const nextBaseline = createQuickBaselineFromMeasurements(project);
+    patchProject((currentProject) => ({
+      ...currentProject,
+      originalLensBaseline: nextBaseline
+    }));
+    setBaselineFeedback("Original Lens Baseline saved from current measurements.");
+  };
+
+  const exportBaselineJson = () => {
+    if (!project.originalLensBaseline) {
+      setBaselineFeedback("No baseline found. Save one first.");
+      return;
+    }
+    const donor = project.donorLens?.trim() || project.name.trim() || "lens";
+    const fileName = `${safeFileName(donor)}_original_lens_baseline.json`;
+    downloadTextFile(fileName, JSON.stringify(project.originalLensBaseline, null, 2));
+  };
+
+  const openBaselineWizard = (prefill?: OriginalLensBaseline) => {
+    setWizardInitialBaseline(prefill ?? project.originalLensBaseline ?? createQuickBaselineFromMeasurements(project));
+    setWizardOpen(true);
+    setBaselineFeedback("");
+  };
+
+  const applyWizardResult = (
+    mode: "create" | "replace" | "append",
+    payload: {
+      baseline: OriginalLensBaseline;
+      stackItems: StackItem[];
+      annotationToStackId: Record<string, string>;
+      focusTravel: LensProject["focusTravel"];
+    }
+  ) => {
+    patchProject((currentProject) => {
+      const currentStack = normalizeStackPositions(currentProject.stackItems);
+      const generated = normalizeStackPositions(payload.stackItems);
+
+      const nextStack =
+        mode === "append"
+          ? normalizeStackPositions([...currentStack, ...generated])
+          : generated;
+
+      const nextAnnotations = currentProject.measurements.annotations.map((annotation) => {
+        const linkedStackItemId = payload.annotationToStackId[annotation.id];
+        if (!linkedStackItemId) return annotation;
+        return {
+          ...annotation,
+          linkedStackItemId,
+          updatedAt: new Date().toISOString()
+        };
+      });
+
+      return {
+        ...currentProject,
+        stackItems: nextStack,
+        originalLensBaseline: payload.baseline,
+        focusTravel: payload.focusTravel,
+        measurements: {
+          ...currentProject.measurements,
+          annotations: nextAnnotations,
+          updatedAt: new Date().toISOString()
+        }
+      };
+    });
+
+    setWizardOpen(false);
+    setBaselineFeedback(
+      mode === "append"
+        ? "Baseline saved and generated stack appended."
+        : "Baseline saved and generated stack created."
+    );
+
+    if (typeof window !== "undefined") {
+      window.setTimeout(() => {
+        window.location.href = projectStackHref(project.id);
+      }, 50);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <section className="panel p-4">
@@ -1058,7 +1453,72 @@ export function MeasurementsBoard({
           Visual exploded lens map with approximate photo scale. Final CAD-critical dimensions should still come from
           calipers.
         </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={saveOriginalLensBaseline}>
+            Save Original Lens Baseline
+          </Button>
+          <Button variant="primary" onClick={() => openBaselineWizard()}>
+            Generate Stack From Measurements
+          </Button>
+          <Button variant="secondary" onClick={() => openBaselineWizard(project.originalLensBaseline)}>
+            Baseline Setup Wizard
+          </Button>
+        </div>
+        {baselineFeedback && <p className="mt-2 text-xs text-labWarning">{baselineFeedback}</p>}
       </section>
+
+      {project.originalLensBaseline && (
+        <section className="panel p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">Baseline Summary</h3>
+          <div className="mt-2 grid gap-2 text-sm md:grid-cols-2">
+            <p className="text-labMuted">
+              Name: <span className="text-labText">{project.originalLensBaseline.name}</span>
+            </p>
+            <p className="text-labMuted">
+              Donor lens:{" "}
+              <span className="text-labText">
+                {project.originalLensBaseline.donorLensName || project.donorLens || "Not set"}
+              </span>
+            </p>
+            <p className="text-labMuted">
+              Physical components:{" "}
+              <span className="mono text-labText">{project.originalLensBaseline.physicalComponents.length}</span>
+            </p>
+            <p className="text-labMuted">
+              Mount:{" "}
+              <span className="mono text-labText">
+                {project.originalLensBaseline.originalMount}
+                {project.originalLensBaseline.targetMount
+                  ? ` → ${project.originalLensBaseline.targetMount}`
+                  : ""}
+              </span>
+            </p>
+            <p className="text-labMuted">
+              Created:{" "}
+              <span className="mono text-labText">
+                {new Date(project.originalLensBaseline.createdAt).toLocaleString()}
+              </span>
+            </p>
+            <p className="text-labMuted">
+              Updated:{" "}
+              <span className="mono text-labText">
+                {new Date(project.originalLensBaseline.updatedAt).toLocaleString()}
+              </span>
+            </p>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => openBaselineWizard(project.originalLensBaseline)}>
+              Edit Baseline
+            </Button>
+            <Button variant="primary" onClick={() => openBaselineWizard(project.originalLensBaseline)}>
+              Regenerate Stack
+            </Button>
+            <Button variant="secondary" onClick={exportBaselineJson}>
+              Export Baseline JSON
+            </Button>
+          </div>
+        </section>
+      )}
 
       <section className="panel space-y-4 p-4">
         <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto]">
@@ -1533,6 +1993,12 @@ export function MeasurementsBoard({
                     </p>
                     {annotationSummary(annotation) && (
                       <p className="mt-1 text-xs text-labMuted">{annotationSummary(annotation)}</p>
+                    )}
+                    {annotation.linkedStackItemId && (
+                      <p className="mt-1 text-xs text-labAccent">
+                        Linked to stack item:{" "}
+                        {stackItemById.get(annotation.linkedStackItemId)?.name ?? annotation.linkedStackItemId}
+                      </p>
                     )}
                   </button>
                 ))}
@@ -2111,7 +2577,11 @@ export function MeasurementsBoard({
                     {selectedAnnotation.linkedStackItemId ? "Update Linked Stack Item" : "Create Stack Item From Annotation"}
                   </Button>
                   {selectedAnnotation.linkedStackItemId && (
-                    <p className="mono text-xs text-labMuted">Linked stack item: {selectedAnnotation.linkedStackItemId}</p>
+                    <p className="mono text-xs text-labMuted">
+                      Linked stack item:{" "}
+                      {stackItemById.get(selectedAnnotation.linkedStackItemId)?.name ??
+                        selectedAnnotation.linkedStackItemId}
+                    </p>
                   )}
                   <Button variant="danger" onClick={deleteSelectedAnnotation}>
                     Delete Annotation
@@ -2122,6 +2592,16 @@ export function MeasurementsBoard({
           </aside>
         </div>
       </section>
+
+      {wizardOpen && (
+        <BaselineStackWizard
+          project={project}
+          annotations={annotations}
+          initialBaseline={wizardInitialBaseline}
+          onCancel={() => setWizardOpen(false)}
+          onApply={applyWizardResult}
+        />
+      )}
     </div>
   );
 }

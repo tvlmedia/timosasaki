@@ -1,6 +1,15 @@
 import { createDemoProject, createEmptyMeasurementsState, defaultCadDefaults, defaultTargetLook } from "@/lib/defaults";
+import { defaultFocusTravelSetup, normalizeFocusTravelSetup } from "@/lib/focusTravel";
 import { createId, safeFileName } from "@/lib/ids";
-import type { CadDefaults, LensProject, MeasurementsState } from "@/types";
+import type {
+  BaselineAirGap,
+  BaselinePhysicalComponent,
+  CadDefaults,
+  LensProject,
+  MechanicalPart,
+  MeasurementsState,
+  OriginalLensBaseline
+} from "@/types";
 
 const STORAGE_KEY = "sasaki-lens-lab-projects-v1";
 const SETTINGS_KEY = "sasaki-lens-lab-settings-v1";
@@ -37,9 +46,95 @@ function isLensProjectCandidate(value: unknown): value is LensProject {
   );
 }
 
+function toPositive(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
+  return value;
+}
+
+function buildSteppedSegmentsFromMeasurementFields(fields: {
+  hasSteppedProfile?: boolean;
+  largeDiameterMm?: number;
+  smallDiameterMm?: number;
+  largeSectionThicknessMm?: number;
+  smallSectionThicknessMm?: number;
+  stepDirection?: "large_side_front" | "large_side_rear" | "unknown";
+  steppedProfileSegments?: Array<{
+    id?: string;
+    name?: string;
+    diameterMm?: number;
+    depthMm?: number;
+  }>;
+}): Array<{ id: string; name?: string; diameterMm: number; depthMm: number }> {
+  const explicitSegments = (fields.steppedProfileSegments ?? [])
+    .map((segment, index) => ({
+      id: segment.id || `profile-${index + 1}`,
+      name: segment.name?.trim() || `Segment ${index + 1}`,
+      diameterMm: toPositive(segment.diameterMm),
+      depthMm: toPositive(segment.depthMm)
+    }))
+    .filter((segment) => segment.diameterMm > 0 && segment.depthMm > 0);
+
+  const largeDiameterMm = toPositive(fields.largeDiameterMm);
+  const smallDiameterMm = toPositive(fields.smallDiameterMm);
+  const largeSectionThicknessMm = toPositive(fields.largeSectionThicknessMm);
+  const smallSectionThicknessMm = toPositive(fields.smallSectionThicknessMm);
+  const hasCompleteStepped =
+    largeDiameterMm > 0 && smallDiameterMm > 0 && largeSectionThicknessMm > 0 && smallSectionThicknessMm > 0;
+
+  if (!fields.hasSteppedProfile) {
+    return explicitSegments;
+  }
+  if (hasCompleteStepped) {
+    if (explicitSegments.length >= 2) return explicitSegments;
+    if (fields.stepDirection === "large_side_front") {
+      return [
+        {
+          id: "profile-front-large",
+          name: "Large section (front)",
+          diameterMm: largeDiameterMm,
+          depthMm: largeSectionThicknessMm
+        },
+        {
+          id: "profile-rear-small",
+          name: "Small section (rear)",
+          diameterMm: smallDiameterMm,
+          depthMm: smallSectionThicknessMm
+        }
+      ];
+    }
+    return [
+      {
+        id: "profile-front-small",
+        name: "Small section (front)",
+        diameterMm: smallDiameterMm,
+        depthMm: smallSectionThicknessMm
+      },
+      {
+        id: "profile-rear-large",
+        name: "Large section (rear)",
+        diameterMm: largeDiameterMm,
+        depthMm: largeSectionThicknessMm
+      }
+    ];
+  }
+  return explicitSegments;
+}
+
 export function normalizeProject(project: LensProject): LensProject {
   const now = new Date().toISOString();
   const normalizedMeasurements = normalizeMeasurements(project.measurements, now);
+  const annotationById = new Map(
+    normalizedMeasurements.annotations.map((annotation) => [annotation.id, annotation] as const)
+  );
+  const inputStackItems = [...(project.stackItems ?? [])];
+  const opticalStackItems = inputStackItems.filter((item) => item.type !== "barrel");
+  const migratedBarrels = inputStackItems
+    .filter((item): item is Extract<typeof item, { type: "barrel" }> => item.type === "barrel")
+    .map(barrelStackItemToMechanicalPart);
+  const existingMechanical = (project.mechanicalParts ?? []).map(normalizeMechanicalPart);
+  const mechanicalParts = [...existingMechanical, ...migratedBarrels].filter(
+    (part, index, all) => all.findIndex((entry) => entry.id === part.id) === index
+  );
 
   return {
     ...project,
@@ -49,15 +144,9 @@ export function normalizeProject(project: LensProject): LensProject {
       ...defaultCadDefaults,
       ...(project.cadDefaults ?? {})
     },
-    stackItems: [...(project.stackItems ?? [])]
+    stackItems: opticalStackItems
       .map((item, index) => {
         const base = { ...item, positionIndex: index };
-        if (base.type === "barrel") {
-          return {
-            ...base,
-            autoFitToStack: base.autoFitToStack ?? true
-          };
-        }
         if (base.type === "retaining_ring") {
           return {
             ...base,
@@ -65,17 +154,128 @@ export function normalizeProject(project: LensProject): LensProject {
           };
         }
         if (base.type !== "glass") return base;
+        const linkedAnnotation = base.sourceMeasurementAnnotationId
+          ? annotationById.get(base.sourceMeasurementAnnotationId)
+          : undefined;
+        const linkedFields = linkedAnnotation?.itemType === "glass" ? linkedAnnotation.fields : undefined;
+        const linkedStepped = linkedFields
+          ? {
+              hasSteppedProfile: Boolean(linkedFields.hasSteppedProfile),
+              largeDiameterMm: toPositive(linkedFields.largeDiameterMm) > 0 ? linkedFields.largeDiameterMm : undefined,
+              smallDiameterMm: toPositive(linkedFields.smallDiameterMm) > 0 ? linkedFields.smallDiameterMm : undefined,
+              largeSectionThicknessMm:
+                toPositive(linkedFields.largeSectionThicknessMm) > 0 ? linkedFields.largeSectionThicknessMm : undefined,
+              smallSectionThicknessMm:
+                toPositive(linkedFields.smallSectionThicknessMm) > 0 ? linkedFields.smallSectionThicknessMm : undefined,
+              stepDirection: linkedFields.stepDirection ?? "unknown",
+              profileSegments: buildSteppedSegmentsFromMeasurementFields(linkedFields)
+            }
+          : undefined;
+
+        const shouldHydrateSteppedFromMeasurement =
+          Boolean(linkedStepped?.hasSteppedProfile) &&
+          (!base.hasSteppedProfile ||
+            toPositive(base.largeDiameterMm) <= 0 ||
+            toPositive(base.smallDiameterMm) <= 0 ||
+            toPositive(base.largeSectionThicknessMm) <= 0 ||
+            toPositive(base.smallSectionThicknessMm) <= 0);
+
+        const hydratedStepped = shouldHydrateSteppedFromMeasurement
+          ? {
+              hasSteppedProfile: linkedStepped?.hasSteppedProfile,
+              largeDiameterMm: linkedStepped?.largeDiameterMm,
+              smallDiameterMm: linkedStepped?.smallDiameterMm,
+              largeSectionThicknessMm: linkedStepped?.largeSectionThicknessMm,
+              smallSectionThicknessMm: linkedStepped?.smallSectionThicknessMm,
+              stepDirection: linkedStepped?.stepDirection,
+              advancedProfileEnabled:
+                (linkedStepped?.profileSegments?.length ?? 0) > 0 ? true : base.advancedProfileEnabled,
+              profileSegments:
+                (linkedStepped?.profileSegments?.length ?? 0) > 0
+                  ? linkedStepped?.profileSegments
+                  : base.profileSegments
+            }
+          : {};
         return {
           ...base,
           physicalComponentMode: base.physicalComponentMode ?? "single_element",
-          opticalSubElements: base.opticalSubElements ?? []
+          opticalSubElements: base.opticalSubElements ?? [],
+          ...hydratedStepped
         };
       })
       .sort((a, b) => a.positionIndex - b.positionIndex),
+    mechanicalParts,
     experiments: project.experiments ?? [],
     measurements: normalizedMeasurements,
+    focusTravel: normalizeFocusTravelSetup(project.focusTravel),
+    originalLensBaseline: normalizeOriginalLensBaseline(project.originalLensBaseline),
     createdAt: project.createdAt ?? now,
     updatedAt: project.updatedAt ?? now
+  };
+}
+
+function defaultSurroundsStack(type: MechanicalPart["type"]): boolean {
+  return type !== "mount_reference";
+}
+
+function normalizeMechanicalPart(part: MechanicalPart): MechanicalPart {
+  return {
+    ...part,
+    surroundsStack: part.surroundsStack ?? defaultSurroundsStack(part.type),
+    contributesToOpticalStackLength: part.contributesToOpticalStackLength ?? false
+  };
+}
+
+function barrelStackItemToMechanicalPart(
+  item: Extract<LensProject["stackItems"][number], { type: "barrel" }>
+): MechanicalPart {
+  return normalizeMechanicalPart({
+    id: item.id,
+    type: "barrel",
+    name: item.name || "Barrel",
+    innerDiameterMm: item.innerDiameterMm,
+    outerDiameterMm: item.outerDiameterMm,
+    lengthMm: item.lengthMm,
+    notes: item.notes,
+    surroundsStack: true,
+    contributesToOpticalStackLength: item.contributesToOpticalStackLength ?? false
+  });
+}
+
+function normalizeBaselineComponent(component: BaselinePhysicalComponent): BaselinePhysicalComponent {
+  return {
+    ...component,
+    componentMode: component.componentMode ?? "single_element",
+    opticalSubElements: component.opticalSubElements ?? []
+  };
+}
+
+function normalizeBaselineAirGap(gap: BaselineAirGap): BaselineAirGap {
+  return {
+    ...gap,
+    thicknessMm: Number.isFinite(gap.thicknessMm) ? gap.thicknessMm : 1,
+    innerDiameterMm: Number.isFinite(gap.innerDiameterMm) ? gap.innerDiameterMm : 20,
+    outerDiameterMm: Number.isFinite(gap.outerDiameterMm) ? gap.outerDiameterMm : 38
+  };
+}
+
+function normalizeOriginalLensBaseline(
+  baseline: OriginalLensBaseline | undefined
+): OriginalLensBaseline | undefined {
+  if (!baseline) return undefined;
+  if (!baseline.id || !baseline.name) return undefined;
+  return {
+    ...baseline,
+    sourceMeasurementPhotoIds: baseline.sourceMeasurementPhotoIds ?? [],
+    physicalComponents: (baseline.physicalComponents ?? []).map(normalizeBaselineComponent),
+    airGaps: (baseline.airGaps ?? []).map(normalizeBaselineAirGap),
+    createdAt: baseline.createdAt ?? new Date().toISOString(),
+    updatedAt: baseline.updatedAt ?? new Date().toISOString(),
+    originalMount: baseline.originalMount ?? "M42",
+    originalFlangeDistanceMm:
+      Number.isFinite(baseline.originalFlangeDistanceMm) && baseline.originalFlangeDistanceMm > 0
+        ? baseline.originalFlangeDistanceMm
+        : 45.46
   };
 }
 
@@ -180,6 +380,10 @@ export function duplicateProject(id: string): LensProject | undefined {
     createdAt: now,
     updatedAt: now,
     stackItems: duplicatedStackItems,
+    mechanicalParts: (project.mechanicalParts ?? []).map((part) => ({
+      ...part,
+      id: createId("mech")
+    })),
     experiments: project.experiments.map((experiment) => ({
       ...experiment,
       id: createId("experiment"),
@@ -272,8 +476,10 @@ export function createEmptyProject(name: string): LensProject {
     createdAt: now,
     updatedAt: now,
     stackItems: [],
+    mechanicalParts: [],
     experiments: [],
     measurements: createEmptyMeasurementsState(now),
+    focusTravel: defaultFocusTravelSetup(),
     cadDefaults: getGlobalCadDefaults()
   };
 }

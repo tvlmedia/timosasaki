@@ -38,6 +38,8 @@ export type BaseStackItem = {
   type: StackItemType;
   opticalType?: OpticalItemType;
   positionIndex: number;
+  sourceMeasurementAnnotationId?: string;
+  sourceBaselineComponentId?: string;
   locked?: boolean;
   notes?: string;
 };
@@ -123,7 +125,7 @@ export type DiffusionItem = BaseStackItem & {
 
 export type MountItem = BaseStackItem & {
   type: "mount";
-  mountType: "PL" | "LPL" | "EF" | "E" | "M42" | "CUSTOM";
+  mountType: "PL" | "LPL" | "EF" | "E" | "M42" | "NIKON_F" | "LEICA_M" | "CUSTOM";
   flangeDistanceMm?: number;
   innerClearanceMm?: number;
   notes?: string;
@@ -134,6 +136,7 @@ export type BarrelItem = BaseStackItem & {
   innerDiameterMm: number;
   outerDiameterMm: number;
   lengthMm: number;
+  contributesToOpticalStackLength?: boolean;
   autoFitToStack?: boolean;
   hasIrisSlot?: boolean;
   hasDiffusionSlot?: boolean;
@@ -165,3 +168,27 @@ export type StackItem =
   | BarrelItem
   | RetainingRingItem
   | CustomItem;
+
+export type MechanicalPartType =
+  | "barrel"
+  | "fixed_pl_barrel"
+  | "sliding_optical_carrier"
+  | "main_barrel"
+  | "moving_carrier"
+  | "cam_sleeve"
+  | "mount_reference"
+  | "custom_mechanical";
+
+export type MechanicalPart = {
+  id: string;
+  type: MechanicalPartType;
+  name: string;
+  innerDiameterMm?: number;
+  outerDiameterMm?: number;
+  lengthMm?: number;
+  startZMm?: number;
+  endZMm?: number;
+  surroundsStack?: boolean;
+  contributesToOpticalStackLength?: boolean;
+  notes?: string;
+};

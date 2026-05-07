@@ -61,6 +61,13 @@ export type ElementOrientation =
 
 export type StepDirection = "large_side_front" | "large_side_rear" | "unknown";
 
+export type SteppedProfileSegment = {
+  id: string;
+  name?: string;
+  diameterMm?: number;
+  depthMm?: number;
+};
+
 export type MeasurementItemType = "glass" | "spacer_ring" | "housing_barrel" | "iris_disk" | "other";
 
 export type PhysicalComponentMode = "single_element" | "optical_group";
@@ -115,6 +122,7 @@ export type MeasurementFields = {
   largeSectionThicknessMm?: number;
   smallSectionThicknessMm?: number;
   stepDirection?: StepDirection;
+  steppedProfileSegments?: SteppedProfileSegment[];
 
   innerDiameterMm?: number;
   outerDiameterMm?: number;

@@ -1,4 +1,5 @@
 import type { CadDefaults, LensProject, MeasurementsState, TargetLook } from "@/types";
+import { defaultFocusTravelSetup } from "@/lib/focusTravel";
 
 export const defaultCadDefaults: CadDefaults = {
   printToleranceMm: 0.18,
@@ -11,7 +12,27 @@ export const defaultCadDefaults: CadDefaults = {
   camSlotClearanceMm: 0.3,
   defaultOuterDiameterMm: 50,
   defaultInnerDiameterMm: 40,
-  facets: 128
+  facets: 128,
+  plStepReferencePath: "cad/reference/PL_Lens_Tail.STEP",
+  plRearNeckOuterDiameterMm: 31.0,
+  plRearNeckInnerDiameterMm: 26.0,
+  plRearNeckLengthMm: 12.0,
+  plLockingClearanceLengthMm: 12.0,
+  plLockingClearanceDiameterMm: 42.0,
+  plMainBarrelOuterDiameterMm: 44.0,
+  plMainBarrelInnerDiameterMm: 40.0,
+  plMainBarrelLengthMm: 50.0,
+  plStepUpStartFromFlangeMm: 12.0,
+  plSlotCount: 2,
+  plSlotAngleOffsetDeg: 0,
+  plSlotLengthManualMm: 30.0,
+  plSlotStartZMm: 13.0,
+  plPinDiameterMm: 2.0,
+  plPinClearanceMm: 0.3,
+  plAssemblyIncludeMainBarrelSection: true,
+  plAssemblyIncludeMovingCarrier: true,
+  plAssemblyIncludeGuidePins: true,
+  plAssemblyFuseBarrelToPl: false
 };
 
 export const defaultTargetLook: TargetLook = {
@@ -61,6 +82,8 @@ export function createDemoProject(): LensProject {
     createdAt: now,
     updatedAt: now,
     measurements: createEmptyMeasurementsState(now),
+    focusTravel: defaultFocusTravelSetup(),
+    mechanicalParts: [],
     stackItems: [
       {
         id: "e1",

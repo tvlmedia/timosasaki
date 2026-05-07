@@ -16,7 +16,7 @@ export function generateFixedPlBarrelWithSlotsScad(params: FixedPLBarrelWithSlot
     params.rearNeckLengthMm
   );
   const includePlReferenceMount = params.includePlReferenceMount ?? true;
-  const useImportedPlReferenceStl = params.useImportedPlReferenceStl ?? false;
+  const useImportedPlReferenceStl = params.useImportedPlReferenceStl ?? true;
   const plReferenceStlPath = params.plReferenceStlPath ?? "cad/reference/PL_Lens_Tail.stl";
   const plReferenceMountThickness = Math.max(
     params.plReferenceMountThicknessMm ?? params.plLockingClearanceLengthMm,

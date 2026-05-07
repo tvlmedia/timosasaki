@@ -19,6 +19,13 @@ import { generateScad, type ScadPayload } from "@/lib/scad";
 import { downloadTextFile } from "@/lib/storage";
 import type { LensProject, StackItem } from "@/types";
 
+const DEFAULT_PL_STEP_RELATIVE_PATH = "cad/reference/PL_Lens_Tail.STEP";
+const DEFAULT_PL_STL_RELATIVE_PATH = "cad/reference/PL_Lens_Tail.stl";
+const DEFAULT_PL_STEP_ABSOLUTE_PATH =
+  "/Users/tvlmedia/Downloads/Timo Sasaki/_repo/cad/reference/PL_Lens_Tail.STEP";
+const DEFAULT_PL_STL_ABSOLUTE_PATH =
+  "/Users/tvlmedia/Downloads/Timo Sasaki/_repo/cad/reference/PL_Lens_Tail.stl";
+
 const needsSource: Record<CadPartType, StackItem["type"] | null> = {
   element_cup: "glass",
   spacer_ring: "spacer",
@@ -130,6 +137,26 @@ function getNearestBarrelInnerDiameter(items: StackItem[], source?: StackItem): 
   return nearest.innerDiameterMm;
 }
 
+function resolvePlStepPath(raw?: string): string {
+  const normalized = (raw ?? DEFAULT_PL_STEP_RELATIVE_PATH).trim();
+  if (normalized === DEFAULT_PL_STEP_RELATIVE_PATH) {
+    return DEFAULT_PL_STEP_ABSOLUTE_PATH;
+  }
+  return normalized;
+}
+
+function derivePlStlPathFromStepPath(stepPathRaw?: string): string {
+  const stepPath = resolvePlStepPath(stepPathRaw);
+  if (stepPath.toLowerCase().endsWith(".stl")) return stepPath;
+  if (stepPath.toLowerCase() === DEFAULT_PL_STEP_ABSOLUTE_PATH.toLowerCase()) {
+    return DEFAULT_PL_STL_ABSOLUTE_PATH;
+  }
+  if (stepPath.toLowerCase() === DEFAULT_PL_STEP_RELATIVE_PATH.toLowerCase()) {
+    return DEFAULT_PL_STL_RELATIVE_PATH;
+  }
+  return stepPath.replace(/\.step$/i, ".stl");
+}
+
 function estimateMainBarrelLengthMm(project: LensProject, source?: StackItem): number {
   const sourceBarrel = source?.type === "barrel" ? source : undefined;
   if (sourceBarrel && sourceBarrel.lengthMm > 0) {
@@ -168,7 +195,7 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
   const plAssemblyIncludeCarrier = defaults.plAssemblyIncludeMovingCarrier ?? true;
   const plAssemblyIncludePins = defaults.plAssemblyIncludeGuidePins ?? true;
   const plAssemblyFuse = defaults.plAssemblyFuseBarrelToPl ?? false;
-  const plStepReferencePath = defaults.plStepReferencePath ?? "cad/reference/PL_Lens_Tail.STEP";
+  const plStepReferencePath = resolvePlStepPath(defaults.plStepReferencePath);
 
   switch (partType) {
     case "element_cup": {
@@ -317,10 +344,7 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
         estimateMainBarrelLengthMm(project, source)
       );
       const totalLength = Number((stepUpStart + mainBarrelLength).toFixed(3));
-      const plReferenceStlPath = (defaults.plStepReferencePath ?? "cad/reference/PL_Lens_Tail.STEP").replace(
-        /\.step$/i,
-        ".stl"
-      );
+      const plReferenceStlPath = derivePlStlPathFromStepPath(defaults.plStepReferencePath);
       return {
         type: "fixed_pl_barrel_with_slots",
         params: {
@@ -345,7 +369,7 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
           pinDiameterMm: pinDiameter,
           pinClearanceMm: pinClearance,
           includePlReferenceMount: true,
-          useImportedPlReferenceStl: false,
+          useImportedPlReferenceStl: true,
           plReferenceStlPath,
           plReferenceMountThicknessMm: plLockClearanceLength,
           plReferenceMountOuterDiameterMm: Math.max(
@@ -471,8 +495,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const plAssemblyIncludeCarrier = project.cadDefaults.plAssemblyIncludeMovingCarrier ?? true;
   const plAssemblyIncludePins = project.cadDefaults.plAssemblyIncludeGuidePins ?? true;
   const plAssemblyFuse = project.cadDefaults.plAssemblyFuseBarrelToPl ?? false;
-  const plStepReferencePath =
-    project.cadDefaults.plStepReferencePath ?? "cad/reference/PL_Lens_Tail.STEP";
+  const plStepReferencePath = resolvePlStepPath(project.cadDefaults.plStepReferencePath);
 
   const sourceCandidates = useMemo(() => {
     const requiredType = needsSource[partType];
@@ -549,8 +572,9 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       : []),
     ...(exportMode === "openscad" && payload.type === "fixed_pl_barrel_with_slots"
       ? [
-          "OpenSCAD export does not include the real PL STEP mount geometry.",
-          "For a real PL mount + barrel assembly, switch to FreeCAD Macro export and run the generated .FCMacro with your PL Lens Tail.STEP file."
+          "OpenSCAD fixed-PL barrel can include an imported PL STL reference under the barrel.",
+          "If the PL shape is missing, verify pl_reference_stl_path points to a valid local STL file.",
+          "For exact STEP alignment + full assembly workflow, use FreeCAD Assembly Macro with PL STEP."
         ]
       : [])
   ];

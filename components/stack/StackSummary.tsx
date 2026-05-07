@@ -10,7 +10,15 @@ import {
 import { WarningBox } from "@/components/common/WarningBox";
 import type { CadDefaults, StackItem } from "@/types";
 
-export function StackSummary({ items, defaults }: { items: StackItem[]; defaults: CadDefaults }) {
+export function StackSummary({
+  items,
+  defaults,
+  mechanicalPartsCount
+}: {
+  items: StackItem[];
+  defaults: CadDefaults;
+  mechanicalPartsCount: number;
+}) {
   const totalLength = getTotalStackLength(items);
   const largestGlass = getLargestGlassDiameter(items);
   const recommendedInner = getRecommendedBarrelInnerDiameter(items, defaults);
@@ -23,7 +31,7 @@ export function StackSummary({ items, defaults }: { items: StackItem[]; defaults
         <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">Stack Summary</h3>
         <div className="grid gap-2 text-sm">
           <div className="flex justify-between">
-            <span className="text-labMuted">Total stack length</span>
+            <span className="text-labMuted">Optical stack length</span>
             <span className="mono">{totalLength.toFixed(2)} mm</span>
           </div>
           <div className="flex justify-between">
@@ -37,6 +45,10 @@ export function StackSummary({ items, defaults }: { items: StackItem[]; defaults
           <div className="flex justify-between">
             <span className="text-labMuted">Recommended barrel OD</span>
             <span className="mono">{recommendedOuter.toFixed(2)} mm</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-labMuted">Mechanical parts</span>
+            <span className="mono">{mechanicalPartsCount}</span>
           </div>
         </div>
       </div>

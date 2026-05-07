@@ -56,6 +56,31 @@ function getGlassDescriptor(item: Extract<StackItem, { type: "glass" }>): string
 function getQuickSpecs(item: StackItem): string {
   switch (item.type) {
     case "glass":
+      if (
+        item.hasSteppedProfile &&
+        typeof item.largeDiameterMm === "number" &&
+        item.largeDiameterMm > 0 &&
+        typeof item.smallDiameterMm === "number" &&
+        item.smallDiameterMm > 0 &&
+        typeof item.largeSectionThicknessMm === "number" &&
+        item.largeSectionThicknessMm > 0 &&
+        typeof item.smallSectionThicknessMm === "number" &&
+        item.smallSectionThicknessMm > 0
+      ) {
+        const directionText =
+          item.stepDirection === "large_side_front"
+            ? "large side front"
+            : item.stepDirection === "large_side_rear"
+              ? "large side rear"
+              : "direction unknown";
+        return [
+          `Step LØ${formatMm(item.largeDiameterMm)} x ${formatMm(item.largeSectionThicknessMm)}`,
+          `SØ${formatMm(item.smallDiameterMm)} x ${formatMm(item.smallSectionThicknessMm)}`,
+          directionText
+        ]
+          .filter(Boolean)
+          .join("  ·  ");
+      }
       return [
         `D ${formatMm(item.diameterMm)}`,
         `T ${formatMm(item.thicknessMm)}`,

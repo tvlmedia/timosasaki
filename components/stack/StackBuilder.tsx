@@ -17,13 +17,29 @@ import type {
   CadDefaults,
   GlassProfileSegment,
   LensProject,
+  MechanicalPart,
   OpticalItemType,
   StackItem,
-  StackItemType
+  StackItemType,
+  StepDirection
 } from "@/types";
+
+const stepDirectionOptions: Array<{ value: StepDirection; label: string }> = [
+  { value: "large_side_front", label: "Large side faces front" },
+  { value: "large_side_rear", label: "Large side faces rear" },
+  { value: "unknown", label: "Unknown" }
+];
 
 function normalizePositions(items: StackItem[]): StackItem[] {
   return items.map((item, index) => ({ ...item, positionIndex: index }));
+}
+
+function normalizeMechanicalParts(parts: MechanicalPart[]): MechanicalPart[] {
+  return parts.map((part) => ({
+    ...part,
+    surroundsStack: part.surroundsStack ?? part.type !== "mount_reference",
+    contributesToOpticalStackLength: part.contributesToOpticalStackLength ?? false
+  }));
 }
 
 function createStackItem(type: StackItemType, index: number): StackItem {
@@ -39,6 +55,8 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         positionIndex: index,
         diameterMm: 30,
         thicknessMm: 4,
+        hasSteppedProfile: false,
+        stepDirection: "unknown",
         advancedProfileEnabled: false,
         profileSegments: [],
         flipped: false
@@ -131,6 +149,102 @@ function createStackItem(type: StackItemType, index: number): StackItem {
   }
 }
 
+function createMechanicalPart(type: MechanicalPart["type"]): MechanicalPart {
+  const id = createId("mech");
+  switch (type) {
+    case "barrel":
+      return {
+        id,
+        type,
+        name: "Barrel",
+        innerDiameterMm: 40,
+        outerDiameterMm: 44,
+        lengthMm: 40,
+        surroundsStack: true,
+        contributesToOpticalStackLength: false
+      };
+    case "fixed_pl_barrel":
+      return {
+        id,
+        type,
+        name: "Fixed PL barrel",
+        innerDiameterMm: 39,
+        outerDiameterMm: 44,
+        lengthMm: 50,
+        surroundsStack: true,
+        contributesToOpticalStackLength: false
+      };
+    case "sliding_optical_carrier":
+      return {
+        id,
+        type,
+        name: "Sliding optical carrier",
+        innerDiameterMm: 35,
+        outerDiameterMm: 38.5,
+        lengthMm: 30,
+        surroundsStack: true,
+        contributesToOpticalStackLength: false
+      };
+    case "main_barrel":
+      return {
+        id,
+        type,
+        name: "Main barrel section",
+        innerDiameterMm: 40,
+        outerDiameterMm: 44,
+        lengthMm: 50,
+        surroundsStack: true,
+        contributesToOpticalStackLength: false
+      };
+    case "moving_carrier":
+      return {
+        id,
+        type,
+        name: "Moving carrier (legacy)",
+        innerDiameterMm: 34,
+        outerDiameterMm: 38,
+        lengthMm: 24,
+        surroundsStack: true,
+        contributesToOpticalStackLength: false
+      };
+    case "cam_sleeve":
+      return {
+        id,
+        type,
+        name: "Cam sleeve (TODO)",
+        innerDiameterMm: 40,
+        outerDiameterMm: 44,
+        lengthMm: 45,
+        surroundsStack: true,
+        contributesToOpticalStackLength: false
+      };
+    case "mount_reference":
+      return {
+        id,
+        type,
+        name: "Mount reference",
+        surroundsStack: false,
+        contributesToOpticalStackLength: false
+      };
+    case "custom_mechanical":
+      return {
+        id,
+        type,
+        name: "Custom mechanical part",
+        surroundsStack: true,
+        contributesToOpticalStackLength: false
+      };
+    default:
+      return {
+        id,
+        type: "custom_mechanical",
+        name: "Custom mechanical part",
+        surroundsStack: true,
+        contributesToOpticalStackLength: false
+      };
+  }
+}
+
 function toPositive(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
   return value;
@@ -201,32 +315,34 @@ function getNearbyAperture(items: StackItem[], index: number): number {
   return Math.max(left, right);
 }
 
-function getReferenceBarrelInnerDiameter(items: StackItem[], defaults: CadDefaults, index: number): number {
-  const barrelCandidates = items
-    .map((item, itemIndex) => ({ item, itemIndex }))
-    .filter(
-      (entry): entry is { item: Extract<StackItem, { type: "barrel" }>; itemIndex: number } =>
-        entry.item.type === "barrel" && toPositive(entry.item.innerDiameterMm) > 0
+function getReferenceBarrelInnerDiameter(
+  items: StackItem[],
+  mechanicalParts: MechanicalPart[],
+  defaults: CadDefaults
+): number {
+  const priority: MechanicalPart["type"][] = ["fixed_pl_barrel", "main_barrel", "barrel"];
+  for (const type of priority) {
+    const match = mechanicalParts.find(
+      (part) => part.type === type && toPositive(part.innerDiameterMm) > 0
     );
-
-  if (!barrelCandidates.length) {
-    return getRecommendedBarrelInnerDiameter(items, defaults);
+    if (match) return toPositive(match.innerDiameterMm);
   }
 
-  const closest = barrelCandidates.reduce((best, current) => {
-    const bestDistance = Math.abs(best.itemIndex - index);
-    const currentDistance = Math.abs(current.itemIndex - index);
-    return currentDistance < bestDistance ? current : best;
-  });
-
-  return toPositive(closest.item.innerDiameterMm);
+  const any = mechanicalParts.find((part) => toPositive(part.innerDiameterMm) > 0);
+  if (any) return toPositive(any.innerDiameterMm);
+  return getRecommendedBarrelInnerDiameter(items, defaults);
 }
 
-function deriveSpacerRingDimensions(items: StackItem[], defaults: CadDefaults, index: number): {
+function deriveSpacerRingDimensions(
+  items: StackItem[],
+  mechanicalParts: MechanicalPart[],
+  defaults: CadDefaults,
+  index: number
+): {
   innerDiameterMm: number;
   outerDiameterMm: number;
 } {
-  const barrelInner = getReferenceBarrelInnerDiameter(items, defaults, index);
+  const barrelInner = getReferenceBarrelInnerDiameter(items, mechanicalParts, defaults);
   const fitClearancePerSide = Math.max(defaults.radialClearanceMm + defaults.printToleranceMm, 0.25);
   const outerDiameterMm = Math.max(12, barrelInner - fitClearancePerSide * 2);
 
@@ -268,17 +384,10 @@ function isAutoFitBarrel(item: Extract<StackItem, { type: "barrel" }>): boolean 
 }
 
 function applyAutoFitBarrelDimensions(items: StackItem[], defaults: CadDefaults): StackItem[] {
-  const hasAutoBarrel = items.some((item) => item.type === "barrel" && isAutoFitBarrel(item));
-  if (!hasAutoBarrel) return items;
-
-  const target = deriveBarrelDimensionsFromStack(items, defaults);
   return items.map((item) => {
     if (item.type !== "barrel" || !isAutoFitBarrel(item)) return item;
-    return {
-      ...item,
-      innerDiameterMm: target.innerDiameterMm,
-      outerDiameterMm: target.outerDiameterMm
-    };
+    const auto = deriveBarrelDimensionsFromStack(items, defaults);
+    return { ...item, ...auto };
   });
 }
 
@@ -286,11 +395,16 @@ function isAutoFitSpacer(item: Extract<StackItem, { type: "spacer" }>): boolean 
   return item.autoFitToBarrel !== false;
 }
 
-function deriveRetainingRingDimensions(items: StackItem[], defaults: CadDefaults, index: number): {
+function deriveRetainingRingDimensions(
+  items: StackItem[],
+  mechanicalParts: MechanicalPart[],
+  defaults: CadDefaults,
+  index: number
+): {
   innerDiameterMm: number;
   outerDiameterMm: number;
 } {
-  const barrelInner = getReferenceBarrelInnerDiameter(items, defaults, index);
+  const barrelInner = getReferenceBarrelInnerDiameter(items, mechanicalParts, defaults);
   const fitClearancePerSide = Math.max(defaults.radialClearanceMm + defaults.printToleranceMm, 0.25);
   const outerDiameterMm = Math.max(10, barrelInner - fitClearancePerSide * 2);
   const innerDiameterMm = Math.max(4, outerDiameterMm - 2.4);
@@ -304,18 +418,26 @@ function isAutoFitRetainingRing(item: Extract<StackItem, { type: "retaining_ring
   return item.autoFitToBarrel !== false;
 }
 
-function applyAutoFitRetainingRingDimensions(items: StackItem[], defaults: CadDefaults): StackItem[] {
+function applyAutoFitRetainingRingDimensions(
+  items: StackItem[],
+  mechanicalParts: MechanicalPart[],
+  defaults: CadDefaults
+): StackItem[] {
   return items.map((item, index) => {
     if (item.type !== "retaining_ring" || !isAutoFitRetainingRing(item)) return item;
-    const auto = deriveRetainingRingDimensions(items, defaults, index);
+    const auto = deriveRetainingRingDimensions(items, mechanicalParts, defaults, index);
     return { ...item, ...auto };
   });
 }
 
-function applyAutoFitSpacerDimensions(items: StackItem[], defaults: CadDefaults): StackItem[] {
+function applyAutoFitSpacerDimensions(
+  items: StackItem[],
+  mechanicalParts: MechanicalPart[],
+  defaults: CadDefaults
+): StackItem[] {
   return items.map((item, index) => {
     if (item.type !== "spacer" || !isAutoFitSpacer(item)) return item;
-    const auto = deriveSpacerRingDimensions(items, defaults, index);
+    const auto = deriveSpacerRingDimensions(items, mechanicalParts, defaults, index);
     return { ...item, ...auto };
   });
 }
@@ -330,6 +452,19 @@ function validateItem(item: StackItem): string[] {
     case "glass":
       if (invalid(item.diameterMm)) errors.push("Glass diameter must be positive.");
       if (invalid(item.thicknessMm)) errors.push("Glass thickness must be positive.");
+      if (item.hasSteppedProfile) {
+        if (invalid(item.largeDiameterMm)) errors.push("Stepped profile large diameter must be positive.");
+        if (invalid(item.smallDiameterMm)) errors.push("Stepped profile small diameter must be positive.");
+        if (invalid(item.largeSectionThicknessMm)) {
+          errors.push("Stepped profile large section thickness must be positive.");
+        }
+        if (invalid(item.smallSectionThicknessMm)) {
+          errors.push("Stepped profile small section thickness must be positive.");
+        }
+        if (item.stepDirection === undefined) {
+          errors.push("Stepped profile step direction is required.");
+        }
+      }
       if (item.advancedProfileEnabled) {
         const segments = item.profileSegments ?? [];
         if (!segments.length) {
@@ -405,6 +540,10 @@ export function StackBuilder({
   onProjectChange: (project: LensProject) => void;
 }) {
   const orderedItems = useMemo(() => normalizePositions(project.stackItems), [project.stackItems]);
+  const mechanicalParts = useMemo(
+    () => normalizeMechanicalParts(project.mechanicalParts ?? []),
+    [project.mechanicalParts]
+  );
   const [selectedId, setSelectedId] = useState<string | undefined>(orderedItems[0]?.id);
 
   const selectedItem = orderedItems.find((item) => item.id === selectedId) ?? orderedItems[0];
@@ -414,29 +553,55 @@ export function StackBuilder({
   const selectedGlassProfileDepth = getGlassProfileDepth(selectedGlassSegments);
   const selectedGlassProfileMaxDiameter = getGlassProfileMaxDiameter(selectedGlassSegments);
 
-  const commitItems = (nextItems: StackItem[]) => {
+  const commitProjectState = (nextItems: StackItem[], nextMechanicalParts: MechanicalPart[]) => {
     const normalizedInput = normalizePositions(nextItems);
     const withProfileSync = syncAdvancedGlassProfiles(normalizedInput);
     const withBarrelAutoFit = applyAutoFitBarrelDimensions(withProfileSync, project.cadDefaults);
-    const withRetainingAutoFit = applyAutoFitRetainingRingDimensions(withBarrelAutoFit, project.cadDefaults);
-    const normalized = applyAutoFitSpacerDimensions(withRetainingAutoFit, project.cadDefaults);
+    const normalizedMechanical = normalizeMechanicalParts(nextMechanicalParts);
+    const withRetainingAutoFit = applyAutoFitRetainingRingDimensions(
+      withBarrelAutoFit,
+      normalizedMechanical,
+      project.cadDefaults
+    );
+    const normalized = applyAutoFitSpacerDimensions(
+      withRetainingAutoFit,
+      normalizedMechanical,
+      project.cadDefaults
+    );
     onProjectChange({
       ...project,
       updatedAt: new Date().toISOString(),
-      stackItems: normalized
+      stackItems: normalized,
+      mechanicalParts: normalizedMechanical
     });
+  };
+
+  const commitItems = (nextItems: StackItem[]) => {
+    commitProjectState(nextItems, mechanicalParts);
+  };
+
+  const commitMechanicalParts = (nextMechanicalParts: MechanicalPart[]) => {
+    commitProjectState(orderedItems, nextMechanicalParts);
   };
 
   useEffect(() => {
     const withProfileSync = syncAdvancedGlassProfiles(orderedItems);
     const withBarrelAutoFit = applyAutoFitBarrelDimensions(withProfileSync, project.cadDefaults);
-    const withRetainingAutoFit = applyAutoFitRetainingRingDimensions(withBarrelAutoFit, project.cadDefaults);
-    const adjusted = applyAutoFitSpacerDimensions(withRetainingAutoFit, project.cadDefaults);
+    const withRetainingAutoFit = applyAutoFitRetainingRingDimensions(
+      withBarrelAutoFit,
+      mechanicalParts,
+      project.cadDefaults
+    );
+    const adjusted = applyAutoFitSpacerDimensions(
+      withRetainingAutoFit,
+      mechanicalParts,
+      project.cadDefaults
+    );
     const changed = adjusted.some((item, index) => JSON.stringify(item) !== JSON.stringify(orderedItems[index]));
     if (changed) {
-      commitItems(adjusted);
+      commitProjectState(adjusted, mechanicalParts);
     }
-  }, [orderedItems, project.cadDefaults]);
+  }, [orderedItems, mechanicalParts, project.cadDefaults]);
 
   const updateItem = (id: string, updater: (item: StackItem) => StackItem) => {
     commitItems(orderedItems.map((item) => (item.id === id ? updater(item) : item)));
@@ -469,6 +634,39 @@ export function StackBuilder({
         ...entry,
         advancedProfileEnabled: true,
         profileSegments: segments
+      };
+    });
+  };
+
+  const setSteppedProfileEnabled = (glassId: string, enabled: boolean) => {
+    updateTypedItem(glassId, "glass", (entry) => {
+      if (!enabled) {
+        return {
+          ...entry,
+          hasSteppedProfile: false
+        };
+      }
+
+      const largeDiameter = toPositive(entry.largeDiameterMm) > 0 ? entry.largeDiameterMm : entry.diameterMm;
+      const smallDiameter =
+        toPositive(entry.smallDiameterMm) > 0 ? entry.smallDiameterMm : Number(Math.max(0.1, entry.diameterMm - 2).toFixed(2));
+      const largeSectionThickness =
+        toPositive(entry.largeSectionThicknessMm) > 0
+          ? entry.largeSectionThicknessMm
+          : Number((entry.thicknessMm / 2).toFixed(2));
+      const smallSectionThickness =
+        toPositive(entry.smallSectionThicknessMm) > 0
+          ? entry.smallSectionThicknessMm
+          : Number((entry.thicknessMm - largeSectionThickness).toFixed(2));
+
+      return {
+        ...entry,
+        hasSteppedProfile: true,
+        largeDiameterMm: Number(Math.max(0.1, largeDiameter).toFixed(2)),
+        smallDiameterMm: Number(Math.max(0.1, smallDiameter).toFixed(2)),
+        largeSectionThicknessMm: Number(Math.max(0.1, largeSectionThickness).toFixed(2)),
+        smallSectionThicknessMm: Number(Math.max(0.1, smallSectionThickness).toFixed(2)),
+        stepDirection: entry.stepDirection ?? "unknown"
       };
     });
   };
@@ -575,7 +773,7 @@ export function StackBuilder({
     if (index < 0) return;
     const target = withBarrelAutoFit[index];
     if (target.type !== "spacer") return;
-    const auto = deriveSpacerRingDimensions(withBarrelAutoFit, project.cadDefaults, index);
+    const auto = deriveSpacerRingDimensions(withBarrelAutoFit, mechanicalParts, project.cadDefaults, index);
     updateTypedItem(id, "spacer", (entry) => ({ ...entry, ...auto }));
   };
 
@@ -595,7 +793,7 @@ export function StackBuilder({
     if (index < 0) return;
     const target = withBarrelAutoFit[index];
     if (target.type !== "retaining_ring") return;
-    const auto = deriveRetainingRingDimensions(withBarrelAutoFit, project.cadDefaults, index);
+    const auto = deriveRetainingRingDimensions(withBarrelAutoFit, mechanicalParts, project.cadDefaults, index);
     updateTypedItem(id, "retaining_ring", (entry) => ({
       ...entry,
       ...auto
@@ -604,10 +802,14 @@ export function StackBuilder({
 
   const autoFitAllSpacers = () => {
     const withBarrelAutoFit = applyAutoFitBarrelDimensions(orderedItems, project.cadDefaults);
-    const withRetainingAutoFit = applyAutoFitRetainingRingDimensions(withBarrelAutoFit, project.cadDefaults);
+    const withRetainingAutoFit = applyAutoFitRetainingRingDimensions(
+      withBarrelAutoFit,
+      mechanicalParts,
+      project.cadDefaults
+    );
     const adjusted = withRetainingAutoFit.map((item, index) => {
       if (item.type !== "spacer") return item;
-      const auto = deriveSpacerRingDimensions(withRetainingAutoFit, project.cadDefaults, index);
+      const auto = deriveSpacerRingDimensions(withRetainingAutoFit, mechanicalParts, project.cadDefaults, index);
       return { ...item, ...auto };
     });
     commitItems(adjusted);
@@ -641,8 +843,17 @@ export function StackBuilder({
         </section>
 
         <section className="space-y-4">
-          <StackPreview2D items={orderedItems} selectedId={selectedItem?.id} onSelect={setSelectedId} />
-          <StackSummary items={orderedItems} defaults={project.cadDefaults} />
+          <StackPreview2D
+            items={orderedItems}
+            mechanicalParts={mechanicalParts}
+            selectedId={selectedItem?.id}
+            onSelect={setSelectedId}
+          />
+          <StackSummary
+            items={orderedItems}
+            defaults={project.cadDefaults}
+            mechanicalPartsCount={mechanicalParts.length}
+          />
         </section>
 
         <section className="panel p-4">
@@ -728,6 +939,88 @@ export function StackBuilder({
                     Optional. Leave empty if unknown. This is the usable optical diameter, not the physical glass
                     diameter. Used for vignetting and retaining-lip warnings.
                   </p>
+                  <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3">
+                    <label className="flex items-center gap-2 text-sm text-labMuted">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selectedItem.hasSteppedProfile)}
+                        onChange={(event) => setSteppedProfileEnabled(selectedItem.id, event.target.checked)}
+                      />
+                      Has stepped profile
+                    </label>
+                    {selectedItem.hasSteppedProfile && (
+                      <div className="mt-3 space-y-3">
+                        <NumberInput
+                          label="Large diameter (mm)"
+                          value={selectedItem.largeDiameterMm ?? ""}
+                          min={0}
+                          step="0.01"
+                          onChange={(event) =>
+                            updateTypedItem(selectedItem.id, "glass", (entry) => ({
+                              ...entry,
+                              largeDiameterMm: event.target.value ? Number(event.target.value) : undefined
+                            }))
+                          }
+                        />
+                        <NumberInput
+                          label="Small diameter (mm)"
+                          value={selectedItem.smallDiameterMm ?? ""}
+                          min={0}
+                          step="0.01"
+                          onChange={(event) =>
+                            updateTypedItem(selectedItem.id, "glass", (entry) => ({
+                              ...entry,
+                              smallDiameterMm: event.target.value ? Number(event.target.value) : undefined
+                            }))
+                          }
+                        />
+                        <NumberInput
+                          label="Large section thickness (mm)"
+                          value={selectedItem.largeSectionThicknessMm ?? ""}
+                          min={0}
+                          step="0.01"
+                          onChange={(event) =>
+                            updateTypedItem(selectedItem.id, "glass", (entry) => ({
+                              ...entry,
+                              largeSectionThicknessMm: event.target.value ? Number(event.target.value) : undefined
+                            }))
+                          }
+                        />
+                        <NumberInput
+                          label="Small section thickness (mm)"
+                          value={selectedItem.smallSectionThicknessMm ?? ""}
+                          min={0}
+                          step="0.01"
+                          onChange={(event) =>
+                            updateTypedItem(selectedItem.id, "glass", (entry) => ({
+                              ...entry,
+                              smallSectionThicknessMm: event.target.value ? Number(event.target.value) : undefined
+                            }))
+                          }
+                        />
+                        <Select
+                          label="Step direction"
+                          value={selectedItem.stepDirection ?? "unknown"}
+                          onChange={(event) =>
+                            updateTypedItem(selectedItem.id, "glass", (entry) => ({
+                              ...entry,
+                              stepDirection: event.target.value as StepDirection
+                            }))
+                          }
+                        >
+                          {stepDirectionOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                        <p className="text-xs leading-relaxed text-labMuted">
+                          Stepped profile drives stepped cup generation in CAD. Keep these values measured from the
+                          physical optical block.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                   <label className="flex items-center gap-2 text-sm text-labMuted">
                     <input
                       type="checkbox"

@@ -23,3 +23,7 @@ export function projectExperimentsHref(projectId: string): string {
 export function projectMeasurementsHref(projectId: string): string {
   return `/projects/${STATIC_PROJECT_ROUTE_ID}/measurements?projectId=${q(projectId)}`;
 }
+
+export function projectFocusTravelHref(projectId: string): string {
+  return `/projects/${STATIC_PROJECT_ROUTE_ID}/focus-travel?projectId=${q(projectId)}`;
+}

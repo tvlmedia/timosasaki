@@ -2,7 +2,7 @@
 
 import { getItemAxialLength } from "@/lib/calculations";
 import { getItemOpticalType, getItemOpticalTypeLabel } from "@/lib/stackMeta";
-import type { StackItem } from "@/types";
+import type { MechanicalPart, StackItem } from "@/types";
 
 const styleByOpticalType = {
   GLASS: { stroke: "#4aa3ff", fill: "#0f0f0f", dash: undefined as string | undefined },
@@ -16,6 +16,20 @@ const styleByOpticalType = {
   BARREL: { stroke: "#585858", fill: "none", dash: undefined as string | undefined },
   MOUNT: { stroke: "#2dc57b", fill: "#0f0f0f", dash: undefined as string | undefined },
   CUSTOM: { stroke: "#c8c8c8", fill: "#0f0f0f", dash: undefined as string | undefined }
+};
+
+const styleByMechanicalType: Record<
+  MechanicalPart["type"],
+  { stroke: string; dash?: string; label: string }
+> = {
+  barrel: { stroke: "#486e96", label: "Barrel" },
+  fixed_pl_barrel: { stroke: "#4a86c7", label: "Fixed PL barrel" },
+  sliding_optical_carrier: { stroke: "#8bb4dd", label: "Sliding carrier" },
+  main_barrel: { stroke: "#5f85ab", label: "Main barrel" },
+  moving_carrier: { stroke: "#7b9fc2", label: "Moving carrier" },
+  cam_sleeve: { stroke: "#6f7691", dash: "4 3", label: "Cam sleeve (TODO)" },
+  mount_reference: { stroke: "#2dc57b", dash: "3 3", label: "Mount ref" },
+  custom_mechanical: { stroke: "#8b8f9e", label: "Mechanical" }
 };
 
 function toPositive(value: number | undefined): number {
@@ -69,17 +83,26 @@ function getInnerOpeningMm(item: StackItem): number {
 
 export function StackPreview2D({
   items,
+  mechanicalParts = [],
   selectedId,
   onSelect
 }: {
   items: StackItem[];
+  mechanicalParts?: MechanicalPart[];
   selectedId?: string;
   onSelect: (id: string) => void;
 }) {
   const ordered = [...items].sort((a, b) => a.positionIndex - b.positionIndex);
+  const mechanicalOutlines = mechanicalParts.filter(
+    (part) => part.surroundsStack !== false && toPositive(part.outerDiameterMm) > 0
+  );
   const outerDiameters = ordered.map((item) => Math.max(8, getOuterDiameterMm(item)));
   const innerOpenings = ordered.map((item) => getInnerOpeningMm(item));
-  const maxDiameter = Math.max(...outerDiameters, 30);
+  const maxMechanicalOuter = mechanicalOutlines.reduce(
+    (max, part) => Math.max(max, toPositive(part.outerDiameterMm)),
+    0
+  );
+  const maxDiameter = Math.max(...outerDiameters, maxMechanicalOuter, 30);
 
   const axialMm = ordered.map((item) => Math.max(0.6, getItemAxialLength(item)));
   const gap = 4;
@@ -94,7 +117,17 @@ export function StackPreview2D({
   const maxRenderedHeight = 244;
   const diameterScale = maxRenderedHeight / maxDiameter;
 
-  let cursor = 20;
+  const startX = 20;
+  const xPositions: number[] = [];
+  let cursor = startX;
+  for (let i = 0; i < ordered.length; i += 1) {
+    xPositions.push(cursor);
+    cursor += widths[i] + gap;
+  }
+  const contentEndX = ordered.length
+    ? xPositions[ordered.length - 1] + widths[ordered.length - 1]
+    : startX + 24;
+  const contentWidth = Math.max(1, contentEndX - startX);
 
   return (
     <div className="panel p-4">
@@ -105,10 +138,47 @@ export function StackPreview2D({
       <svg viewBox="0 0 900 320" className="h-80 w-full rounded-xl border border-labBorder bg-[#070707]">
         <line x1={18} y1={centerY} x2={882} y2={centerY} stroke="#17304a" strokeWidth={0.8} />
 
+        {[...mechanicalOutlines]
+          .sort((a, b) => toPositive(b.outerDiameterMm) - toPositive(a.outerDiameterMm))
+          .map((part, index) => {
+            const style = styleByMechanicalType[part.type];
+            const outerMm = Math.max(8, toPositive(part.outerDiameterMm));
+            const height = Math.max(22, outerMm * diameterScale);
+            const y = centerY - height / 2;
+            const pad = 6 + index * 3;
+            const x = startX - pad;
+            const width = Math.min(860, contentWidth + pad * 2);
+            const label = part.name?.trim() || style.label;
+            return (
+              <g key={part.id}>
+                <rect
+                  x={x}
+                  y={y}
+                  width={width}
+                  height={height}
+                  fill="none"
+                  stroke={style.stroke}
+                  strokeWidth={1.1}
+                  strokeDasharray={style.dash}
+                  rx={8}
+                  opacity={0.9}
+                />
+                <text
+                  x={x + 8}
+                  y={y + 12}
+                  fill={style.stroke}
+                  fontSize="8"
+                  opacity={0.85}
+                >
+                  {label}
+                </text>
+              </g>
+            );
+          })}
+
         {ordered.map((item, index) => {
           const width = widths[index];
-          const x = cursor;
-          cursor += width + gap;
+          const x = xPositions[index];
           const selected = item.id === selectedId;
           const opticalType = getItemOpticalType(item);
           const style = styleByOpticalType[opticalType];
