@@ -32,6 +32,18 @@ export type CadDefaults = {
   plAssemblyIncludeMovingCarrier?: boolean;
   plAssemblyIncludeGuidePins?: boolean;
   plAssemblyFuseBarrelToPl?: boolean;
+  plImportedStlHeightMm?: number;
+  plImportedStlFlipX?: boolean;
+  plImportedStlFlipY?: boolean;
+  plImportedStlFlipZ?: boolean;
+  plImportedStlRotateXDeg?: number;
+  plImportedStlRotateYDeg?: number;
+  plImportedStlRotateZDeg?: number;
+  plImportedStlOffsetXMm?: number;
+  plImportedStlOffsetYMm?: number;
+  plImportedStlOffsetZMm?: number;
+  plReferenceOverlapMm?: number;
+  plFuseBarrelToReference?: boolean;
 };
 
 export type SteppedCupProfile = {
@@ -171,6 +183,18 @@ export type FixedPLBarrelWithSlotsParams = {
   plReferenceMountThicknessMm?: number;
   plReferenceMountOuterDiameterMm?: number;
   plReferenceMountInnerDiameterMm?: number;
+  plReferenceImportedHeightMm?: number;
+  plReferenceFlipX?: boolean;
+  plReferenceFlipY?: boolean;
+  plReferenceFlipZ?: boolean;
+  plReferenceRotateXDeg?: number;
+  plReferenceRotateYDeg?: number;
+  plReferenceRotateZDeg?: number;
+  plReferenceOffsetXMm?: number;
+  plReferenceOffsetYMm?: number;
+  plReferenceOffsetZMm?: number;
+  plReferenceOverlapMm?: number;
+  fuseBarrelToPlReference?: boolean;
   facets: number;
 };
 

@@ -32,7 +32,19 @@ export const defaultCadDefaults: CadDefaults = {
   plAssemblyIncludeMainBarrelSection: true,
   plAssemblyIncludeMovingCarrier: true,
   plAssemblyIncludeGuidePins: true,
-  plAssemblyFuseBarrelToPl: false
+  plAssemblyFuseBarrelToPl: true,
+  plImportedStlHeightMm: 9.0,
+  plImportedStlFlipX: true,
+  plImportedStlFlipY: false,
+  plImportedStlFlipZ: false,
+  plImportedStlRotateXDeg: 0,
+  plImportedStlRotateYDeg: 0,
+  plImportedStlRotateZDeg: 0,
+  plImportedStlOffsetXMm: 0,
+  plImportedStlOffsetYMm: 0,
+  plImportedStlOffsetZMm: 0,
+  plReferenceOverlapMm: 0.15,
+  plFuseBarrelToReference: true
 };
 
 export const defaultTargetLook: TargetLook = {

@@ -377,6 +377,18 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
             plRearNeckOuter + 8
           ),
           plReferenceMountInnerDiameterMm: plRearNeckInner,
+          plReferenceImportedHeightMm: Math.max(1, project.cadDefaults.plImportedStlHeightMm ?? 9),
+          plReferenceFlipX: project.cadDefaults.plImportedStlFlipX ?? false,
+          plReferenceFlipY: project.cadDefaults.plImportedStlFlipY ?? false,
+          plReferenceFlipZ: project.cadDefaults.plImportedStlFlipZ ?? true,
+          plReferenceRotateXDeg: project.cadDefaults.plImportedStlRotateXDeg ?? 0,
+          plReferenceRotateYDeg: project.cadDefaults.plImportedStlRotateYDeg ?? 0,
+          plReferenceRotateZDeg: project.cadDefaults.plImportedStlRotateZDeg ?? 0,
+          plReferenceOffsetXMm: project.cadDefaults.plImportedStlOffsetXMm ?? 0,
+          plReferenceOffsetYMm: project.cadDefaults.plImportedStlOffsetYMm ?? 0,
+          plReferenceOffsetZMm: project.cadDefaults.plImportedStlOffsetZMm ?? 0,
+          plReferenceOverlapMm: Math.max(0, project.cadDefaults.plReferenceOverlapMm ?? 0.15),
+          fuseBarrelToPlReference: project.cadDefaults.plFuseBarrelToReference ?? true,
           facets: defaults.facets
         }
       };

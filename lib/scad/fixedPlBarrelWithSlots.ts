@@ -34,6 +34,24 @@ export function generateFixedPlBarrelWithSlotsScad(params: FixedPLBarrelWithSlot
     params.plReferenceMountInnerDiameterMm ?? params.rearNeckInnerDiameterMm,
     1
   );
+  const plReferenceImportedHeight = Math.max(
+    params.plReferenceImportedHeightMm ?? plReferenceMountThickness,
+    1
+  );
+  const plReferenceFlipX = params.plReferenceFlipX ?? false;
+  const plReferenceFlipY = params.plReferenceFlipY ?? false;
+  const plReferenceFlipZ = params.plReferenceFlipZ ?? false;
+  const plReferenceRotateXDeg = params.plReferenceRotateXDeg ?? 0;
+  const plReferenceRotateYDeg = params.plReferenceRotateYDeg ?? 0;
+  const plReferenceRotateZDeg = params.plReferenceRotateZDeg ?? 0;
+  const plReferenceOffsetXMm = params.plReferenceOffsetXMm ?? 0;
+  const plReferenceOffsetYMm = params.plReferenceOffsetYMm ?? 0;
+  const plReferenceOffsetZMm = params.plReferenceOffsetZMm ?? 0;
+  const plReferenceOverlap = Math.max(params.plReferenceOverlapMm ?? 0.15, 0);
+  const fuseBarrelToPlReference = params.fuseBarrelToPlReference ?? true;
+  const plReferenceMountZ = plReferenceFlipZ
+    ? plReferenceOverlap
+    : -plReferenceImportedHeight + plReferenceOverlap;
 
   return `${scadHeader(params.partName, params.facets)}
 // Sliding prototype focus (axial slots, no cam/helicoid)
@@ -73,7 +91,19 @@ pl_reference_stl_path = "${plReferenceStlPath}";
 pl_reference_mount_thickness = ${n(plReferenceMountThickness)};
 pl_reference_mount_outer_diameter = ${n(plReferenceMountOuterDiameter)};
 pl_reference_mount_inner_diameter = ${n(plReferenceMountInnerDiameter)};
-pl_reference_mount_z = ${n(-plReferenceMountThickness)};
+pl_reference_mount_z = ${n(plReferenceMountZ)};
+pl_reference_imported_height = ${n(plReferenceImportedHeight)};
+pl_reference_overlap = ${n(plReferenceOverlap)};
+pl_reference_flip_x = ${plReferenceFlipX ? "true" : "false"};
+pl_reference_flip_y = ${plReferenceFlipY ? "true" : "false"};
+pl_reference_flip_z = ${plReferenceFlipZ ? "true" : "false"};
+pl_reference_rotate_x_deg = ${n(plReferenceRotateXDeg)};
+pl_reference_rotate_y_deg = ${n(plReferenceRotateYDeg)};
+pl_reference_rotate_z_deg = ${n(plReferenceRotateZDeg)};
+pl_reference_offset_x = ${n(plReferenceOffsetXMm)};
+pl_reference_offset_y = ${n(plReferenceOffsetYMm)};
+pl_reference_offset_z = ${n(plReferenceOffsetZMm)};
+fuse_barrel_to_pl_reference = ${fuseBarrelToPlReference ? "true" : "false"};
 
 module neck_section() {
   difference() {
@@ -128,18 +158,37 @@ module pl_mount_reference_placeholder() {
   }
 }
 
+module pl_reference_import_transform() {
+  translate([pl_reference_offset_x, pl_reference_offset_y, pl_reference_offset_z])
+    rotate([pl_reference_rotate_x_deg, pl_reference_rotate_y_deg, pl_reference_rotate_z_deg])
+      scale([
+        pl_reference_flip_x ? -1 : 1,
+        pl_reference_flip_y ? -1 : 1,
+        pl_reference_flip_z ? -1 : 1
+      ])
+        import(pl_reference_stl_path);
+}
+
 module pl_mount_reference() {
   if (use_imported_pl_reference_stl) {
     // STL path is editable in generated code.
-    // Keep this import as a reference body; align/rotate in CAD as needed.
+    // Imported STL is positioned so it overlaps barrel neck slightly,
+    // which helps produce one connected printable body.
     translate([0, 0, pl_reference_mount_z])
-      import(pl_reference_stl_path);
+      pl_reference_import_transform();
   } else {
     pl_mount_reference_placeholder();
   }
 }
 
-union() {
+if (fuse_barrel_to_pl_reference) {
+  union() {
+    fixed_barrel_with_slots();
+    if (include_pl_reference_mount) {
+      pl_mount_reference();
+    }
+  }
+} else {
   fixed_barrel_with_slots();
   if (include_pl_reference_mount) {
     pl_mount_reference();
