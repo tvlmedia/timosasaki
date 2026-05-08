@@ -47,11 +47,26 @@ export function generateFixedPlBarrelWithSlotsScad(params: FixedPLBarrelWithSlot
   const plReferenceOffsetXMm = params.plReferenceOffsetXMm ?? 0;
   const plReferenceOffsetYMm = params.plReferenceOffsetYMm ?? 0;
   const plReferenceOffsetZMm = params.plReferenceOffsetZMm ?? 0;
-  const plReferenceOverlap = Math.max(params.plReferenceOverlapMm ?? 0.15, 0);
+  const plReferenceOverlap = Math.min(1, Math.max(params.plReferenceOverlapMm ?? 0.6, 0.5));
   const fuseBarrelToPlReference = params.fuseBarrelToPlReference ?? true;
   const plReferenceMountZ = plReferenceFlipZ
     ? plReferenceOverlap
     : -plReferenceImportedHeight + plReferenceOverlap;
+  const transitionCollarInnerDiameter = Math.max(
+    1,
+    Math.min(params.rearNeckInnerDiameterMm, plReferenceMountInnerDiameter)
+  );
+  const transitionCollarOuterDiameter = Math.max(
+    transitionCollarInnerDiameter + 1.2,
+    params.rearNeckOuterDiameterMm + 4,
+    Math.min(params.mainBarrelOuterDiameterMm, plReferenceMountOuterDiameter - 2)
+  );
+  const transitionCollarHeight = Math.max(
+    3,
+    plReferenceOverlap * 2 + 2,
+    params.plLockingClearanceLengthMm * 0.35
+  );
+  const transitionCollarZ = -transitionCollarHeight + plReferenceOverlap;
 
   return `${scadHeader(params.partName, params.facets)}
 // Sliding prototype focus (axial slots, no cam/helicoid)
@@ -94,6 +109,10 @@ pl_reference_mount_inner_diameter = ${n(plReferenceMountInnerDiameter)};
 pl_reference_mount_z = ${n(plReferenceMountZ)};
 pl_reference_imported_height = ${n(plReferenceImportedHeight)};
 pl_reference_overlap = ${n(plReferenceOverlap)};
+transition_collar_outer_diameter = ${n(transitionCollarOuterDiameter)};
+transition_collar_inner_diameter = ${n(transitionCollarInnerDiameter)};
+transition_collar_height = ${n(transitionCollarHeight)};
+transition_collar_z = ${n(transitionCollarZ)};
 pl_reference_flip_x = ${plReferenceFlipX ? "true" : "false"};
 pl_reference_flip_y = ${plReferenceFlipY ? "true" : "false"};
 pl_reference_flip_z = ${plReferenceFlipZ ? "true" : "false"};
@@ -181,16 +200,29 @@ module pl_mount_reference() {
   }
 }
 
+module transition_collar() {
+  // Solid transition ring that overlaps both barrel and PL reference geometry.
+  // This avoids coplanar-touch gaps and improves manifold fusion for printing.
+  difference() {
+    translate([0, 0, transition_collar_z])
+      cylinder(h = transition_collar_height, d = transition_collar_outer_diameter);
+    translate([0, 0, transition_collar_z - 0.1])
+      cylinder(h = transition_collar_height + 0.2, d = transition_collar_inner_diameter);
+  }
+}
+
 if (fuse_barrel_to_pl_reference) {
   union() {
     fixed_barrel_with_slots();
     if (include_pl_reference_mount) {
+      transition_collar();
       pl_mount_reference();
     }
   }
 } else {
   fixed_barrel_with_slots();
   if (include_pl_reference_mount) {
+    transition_collar();
     pl_mount_reference();
   }
 }

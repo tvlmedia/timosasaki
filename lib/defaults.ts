@@ -34,16 +34,16 @@ export const defaultCadDefaults: CadDefaults = {
   plAssemblyIncludeGuidePins: true,
   plAssemblyFuseBarrelToPl: true,
   plImportedStlHeightMm: 9.0,
-  plImportedStlFlipX: true,
+  plImportedStlFlipX: false,
   plImportedStlFlipY: false,
-  plImportedStlFlipZ: false,
+  plImportedStlFlipZ: true,
   plImportedStlRotateXDeg: 0,
   plImportedStlRotateYDeg: 0,
   plImportedStlRotateZDeg: 0,
   plImportedStlOffsetXMm: 0,
   plImportedStlOffsetYMm: 0,
   plImportedStlOffsetZMm: 0,
-  plReferenceOverlapMm: 0.15,
+  plReferenceOverlapMm: 0.6,
   plFuseBarrelToReference: true
 };
 

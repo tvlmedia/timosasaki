@@ -345,6 +345,25 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
       );
       const totalLength = Number((stepUpStart + mainBarrelLength).toFixed(3));
       const plReferenceStlPath = derivePlStlPathFromStepPath(defaults.plStepReferencePath);
+      const rawFlipX = project.cadDefaults.plImportedStlFlipX;
+      const rawFlipY = project.cadDefaults.plImportedStlFlipY;
+      const rawFlipZ = project.cadDefaults.plImportedStlFlipZ;
+      const rawRotateX = project.cadDefaults.plImportedStlRotateXDeg ?? 0;
+      const rawRotateY = project.cadDefaults.plImportedStlRotateYDeg ?? 0;
+      const rawRotateZ = project.cadDefaults.plImportedStlRotateZDeg ?? 0;
+      const legacyUpsideDownPreset =
+        rawFlipX === true &&
+        rawFlipZ !== true &&
+        rawRotateX === 0 &&
+        rawRotateY === 0 &&
+        rawRotateZ === 0;
+      const plReferenceFlipX = legacyUpsideDownPreset ? false : (rawFlipX ?? false);
+      const plReferenceFlipY = rawFlipY ?? false;
+      const plReferenceFlipZ = legacyUpsideDownPreset ? true : (rawFlipZ ?? true);
+      const plReferenceOverlapMm = Math.min(
+        1,
+        Math.max(project.cadDefaults.plReferenceOverlapMm ?? 0.6, 0.5)
+      );
       return {
         type: "fixed_pl_barrel_with_slots",
         params: {
@@ -378,16 +397,16 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
           ),
           plReferenceMountInnerDiameterMm: plRearNeckInner,
           plReferenceImportedHeightMm: Math.max(1, project.cadDefaults.plImportedStlHeightMm ?? 9),
-          plReferenceFlipX: project.cadDefaults.plImportedStlFlipX ?? false,
-          plReferenceFlipY: project.cadDefaults.plImportedStlFlipY ?? false,
-          plReferenceFlipZ: project.cadDefaults.plImportedStlFlipZ ?? true,
-          plReferenceRotateXDeg: project.cadDefaults.plImportedStlRotateXDeg ?? 0,
-          plReferenceRotateYDeg: project.cadDefaults.plImportedStlRotateYDeg ?? 0,
-          plReferenceRotateZDeg: project.cadDefaults.plImportedStlRotateZDeg ?? 0,
+          plReferenceFlipX,
+          plReferenceFlipY,
+          plReferenceFlipZ,
+          plReferenceRotateXDeg: rawRotateX,
+          plReferenceRotateYDeg: rawRotateY,
+          plReferenceRotateZDeg: rawRotateZ,
           plReferenceOffsetXMm: project.cadDefaults.plImportedStlOffsetXMm ?? 0,
           plReferenceOffsetYMm: project.cadDefaults.plImportedStlOffsetYMm ?? 0,
           plReferenceOffsetZMm: project.cadDefaults.plImportedStlOffsetZMm ?? 0,
-          plReferenceOverlapMm: Math.max(0, project.cadDefaults.plReferenceOverlapMm ?? 0.15),
+          plReferenceOverlapMm,
           fuseBarrelToPlReference: project.cadDefaults.plFuseBarrelToReference ?? true,
           facets: defaults.facets
         }
