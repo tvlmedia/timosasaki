@@ -345,24 +345,17 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
       );
       const totalLength = Number((stepUpStart + mainBarrelLength).toFixed(3));
       const plReferenceStlPath = derivePlStlPathFromStepPath(defaults.plStepReferencePath);
-      const rawFlipX = project.cadDefaults.plImportedStlFlipX;
-      const rawFlipY = project.cadDefaults.plImportedStlFlipY;
-      const rawFlipZ = project.cadDefaults.plImportedStlFlipZ;
       const rawRotateX = project.cadDefaults.plImportedStlRotateXDeg ?? 0;
       const rawRotateY = project.cadDefaults.plImportedStlRotateYDeg ?? 0;
       const rawRotateZ = project.cadDefaults.plImportedStlRotateZDeg ?? 0;
-      const legacyUpsideDownPreset =
-        rawFlipX === true &&
-        rawFlipZ !== true &&
-        rawRotateX === 0 &&
-        rawRotateY === 0 &&
-        rawRotateZ === 0;
-      const plReferenceFlipX = legacyUpsideDownPreset ? false : (rawFlipX ?? false);
-      const plReferenceFlipY = rawFlipY ?? false;
-      const plReferenceFlipZ = legacyUpsideDownPreset ? true : (rawFlipZ ?? true);
+      // Keep PL mount orientation stable for V1 sliding prototype.
+      // Do not auto-flip or inherit old flip presets here.
+      const plReferenceFlipX = false;
+      const plReferenceFlipY = false;
+      const plReferenceFlipZ = false;
       const plReferenceOverlapMm = Math.min(
         1,
-        Math.max(project.cadDefaults.plReferenceOverlapMm ?? 0.6, 0.5)
+        Math.max(project.cadDefaults.plReferenceOverlapMm ?? 0.8, 0.5)
       );
       return {
         type: "fixed_pl_barrel_with_slots",

@@ -36,14 +36,14 @@ export const defaultCadDefaults: CadDefaults = {
   plImportedStlHeightMm: 9.0,
   plImportedStlFlipX: false,
   plImportedStlFlipY: false,
-  plImportedStlFlipZ: true,
+  plImportedStlFlipZ: false,
   plImportedStlRotateXDeg: 0,
   plImportedStlRotateYDeg: 0,
   plImportedStlRotateZDeg: 0,
   plImportedStlOffsetXMm: 0,
   plImportedStlOffsetYMm: 0,
   plImportedStlOffsetZMm: 0,
-  plReferenceOverlapMm: 0.6,
+  plReferenceOverlapMm: 0.8,
   plFuseBarrelToReference: true
 };
 
