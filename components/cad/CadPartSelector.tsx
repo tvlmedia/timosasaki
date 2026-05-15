@@ -10,7 +10,9 @@ export type CadPartType =
   | "retaining_ring"
   | "fixed_pl_barrel_with_slots"
   | "sliding_optical_carrier"
-  | "main_barrel";
+  | "main_barrel"
+  | "moving_carrier"
+  | "cam_sleeve";
 
 const partOptions: Array<{ value: CadPartType; label: string }> = [
   { value: "element_cup", label: "Element cup from glass item" },
