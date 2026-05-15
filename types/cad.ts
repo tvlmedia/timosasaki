@@ -42,6 +42,7 @@ export type CadDefaults = {
   plImportedStlOffsetXMm?: number;
   plImportedStlOffsetYMm?: number;
   plImportedStlOffsetZMm?: number;
+  plBarrelAttachZMm?: number;
   plReferenceOverlapMm?: number;
   plFuseBarrelToReference?: boolean;
 };
@@ -207,6 +208,7 @@ export type FixedPLBarrelWithSlotsParams = {
   plReferenceOffsetXMm?: number;
   plReferenceOffsetYMm?: number;
   plReferenceOffsetZMm?: number;
+  barrelAttachZMm?: number;
   plReferenceOverlapMm?: number;
   fuseBarrelToPlReference?: boolean;
   facets: number;

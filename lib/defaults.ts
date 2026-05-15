@@ -43,7 +43,8 @@ export const defaultCadDefaults: CadDefaults = {
   plImportedStlOffsetXMm: 0,
   plImportedStlOffsetYMm: 0,
   plImportedStlOffsetZMm: 0,
-  plReferenceOverlapMm: 0.8,
+  plBarrelAttachZMm: 0.0,
+  plReferenceOverlapMm: 2.0,
   plFuseBarrelToReference: true
 };
 

@@ -8,8 +8,8 @@ export function generateFixedPlBarrelWithSlotsPushPullV4Scad(params: FixedPLBarr
   const plReferenceStlPath =
     params.plReferenceStlPath || "/Users/tvlmedia/Downloads/Timo Sasaki/_repo/cad/reference/PL_Lens_Tail.stl";
   const barrelDirection = -1;
-  const barrelAttachZ = 0;
-  const plOverlap = Math.max(0, params.plReferenceOverlapMm ?? 1.0);
+  const barrelAttachZ = params.barrelAttachZMm ?? 0.0;
+  const plOverlap = Math.max(0, params.plReferenceOverlapMm ?? 2.0);
 
   const barrelInnerDiameter = Math.max(1, params.mainBarrelInnerDiameterMm || params.innerDiameterMm);
   const plClearanceOuterDiameter = Math.max(

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CadPartSelector, type CadPartType } from "@/components/cad/CadPartSelector";
 import { PartSpecCard } from "@/components/cad/PartSpecCard";
 import { ScadCodeViewer } from "@/components/cad/ScadCodeViewer";
+import { NumberInput } from "@/components/common/NumberInput";
 import { Select } from "@/components/common/Select";
 import { WarningBox } from "@/components/common/WarningBox";
 import {
@@ -243,7 +244,12 @@ function buildInsertionSafeBoreSections(
   return bores;
 }
 
-function createPayload(project: LensProject, partType: CadPartType, source?: StackItem): ScadPayload {
+function createPayload(
+  project: LensProject,
+  partType: CadPartType,
+  source?: StackItem,
+  fixedPlOverrides?: { barrelAttachZMm: number; plOverlapMm: number }
+): ScadPayload {
   const defaults = project.cadDefaults;
   const sourceName = source?.name ?? "part";
   const partName = `${partType}_${safeFileName(sourceName || "part")}`;
@@ -452,10 +458,15 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
       const plReferenceFlipX = false;
       const plReferenceFlipY = false;
       const plReferenceFlipZ = false;
-      const plReferenceOverlapMm = Math.min(
-        1,
-        Math.max(project.cadDefaults.plReferenceOverlapMm ?? 0.8, 0.5)
+      const plReferenceOverlapMm = Math.max(
+        0,
+        Number.isFinite(fixedPlOverrides?.plOverlapMm ?? Number.NaN)
+          ? (fixedPlOverrides?.plOverlapMm as number)
+          : (project.cadDefaults.plReferenceOverlapMm ?? 2.0)
       );
+      const barrelAttachZMm = Number.isFinite(fixedPlOverrides?.barrelAttachZMm ?? Number.NaN)
+        ? (fixedPlOverrides?.barrelAttachZMm as number)
+        : (project.cadDefaults.plBarrelAttachZMm ?? 0.0);
       return {
         type: "fixed_pl_barrel_with_slots",
         params: {
@@ -498,6 +509,7 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
           plReferenceOffsetXMm: project.cadDefaults.plImportedStlOffsetXMm ?? 0,
           plReferenceOffsetYMm: project.cadDefaults.plImportedStlOffsetYMm ?? 0,
           plReferenceOffsetZMm: project.cadDefaults.plImportedStlOffsetZMm ?? 0,
+          barrelAttachZMm,
           plReferenceOverlapMm,
           fuseBarrelToPlReference: project.cadDefaults.plFuseBarrelToReference ?? true,
           facets: defaults.facets
@@ -614,6 +626,12 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const [partType, setPartType] = useState<CadPartType>("element_cup");
   const [sourceItemId, setSourceItemId] = useState<string | undefined>();
   const [exportMode, setExportMode] = useState<"openscad" | "freecad_macro">("openscad");
+  const [fixedPlBarrelAttachZMm, setFixedPlBarrelAttachZMm] = useState<number>(
+    project.cadDefaults.plBarrelAttachZMm ?? 0.0
+  );
+  const [fixedPlOverlapMm, setFixedPlOverlapMm] = useState<number>(
+    project.cadDefaults.plReferenceOverlapMm ?? 2.0
+  );
   const plAssemblyIncludeMain = project.cadDefaults.plAssemblyIncludeMainBarrelSection ?? true;
   const plAssemblyIncludeCarrier = project.cadDefaults.plAssemblyIncludeMovingCarrier ?? true;
   const plAssemblyIncludePins = project.cadDefaults.plAssemblyIncludeGuidePins ?? true;
@@ -634,8 +652,20 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     setSourceItemId((current) => (current && sourceCandidates.some((item) => item.id === current) ? current : sourceCandidates[0].id));
   }, [sourceCandidates]);
 
+  useEffect(() => {
+    setFixedPlBarrelAttachZMm(project.cadDefaults.plBarrelAttachZMm ?? 0.0);
+    setFixedPlOverlapMm(project.cadDefaults.plReferenceOverlapMm ?? 2.0);
+  }, [project.cadDefaults.plBarrelAttachZMm, project.cadDefaults.plReferenceOverlapMm]);
+
   const sourceItem = sourceCandidates.find((item) => item.id === sourceItemId);
-  const payload = createPayload(project, partType, sourceItem);
+  const fixedPlOverrides =
+    partType === "fixed_pl_barrel_with_slots"
+      ? {
+          barrelAttachZMm: fixedPlBarrelAttachZMm,
+          plOverlapMm: fixedPlOverlapMm
+        }
+      : undefined;
+  const payload = createPayload(project, partType, sourceItem, fixedPlOverrides);
   const slidingCarrierPayloadForAssembly = createPayload(
     project,
     "sliding_optical_carrier",
@@ -796,6 +826,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
       values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
       values.total_length = `${pretty(payload.params.lengthMm)} mm`;
+      values.barrel_attach_z = `${pretty(payload.params.barrelAttachZMm ?? 0)} mm`;
+      values.pl_overlap = `${pretty(payload.params.plReferenceOverlapMm ?? 2)} mm`;
       values.rear_neck_od = `${pretty(payload.params.rearNeckOuterDiameterMm)} mm`;
       values.rear_neck_id = `${pretty(payload.params.rearNeckInnerDiameterMm)} mm`;
       values.rear_neck_length = `${pretty(payload.params.rearNeckLengthMm)} mm`;
@@ -894,6 +926,39 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
           </option>
         </Select>
       </div>
+
+      {partType === "fixed_pl_barrel_with_slots" && (
+        <div className="panel space-y-3 p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">PL Alignment Controls</h3>
+          <div className="grid gap-4 md:grid-cols-2">
+            <NumberInput
+              label="barrel_attach_z (mm)"
+              value={fixedPlBarrelAttachZMm}
+              step={0.1}
+              onChange={(event) =>
+                setFixedPlBarrelAttachZMm(
+                  Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : 0
+                )
+              }
+            />
+            <NumberInput
+              label="pl_overlap (mm)"
+              value={fixedPlOverlapMm}
+              min={0}
+              step={0.1}
+              onChange={(event) =>
+                setFixedPlOverlapMm(
+                  Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : 0
+                )
+              }
+            />
+          </div>
+          <p className="text-sm text-labMuted">
+            Use barrel_attach_z to move the generated barrel toward/away from the imported PL STL. Use pl_overlap to
+            make sure the generated barrel physically overlaps the PL reference and does not float.
+          </p>
+        </div>
+      )}
 
       <PartSpecCard title="Part Specs" specs={specs} />
       <WarningBox title="Export Mode Notes" lines={exportModeWarnings} />
