@@ -272,17 +272,21 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
     case "element_cup": {
       const glass = source?.type === "glass" ? source : undefined;
       const advancedProfile = normalizeAdvancedProfileForCup(glass);
+      const steppedLargeDiameterMm = toPositive(glass?.largeDiameterMm);
+      const steppedSmallDiameterMm = toPositive(glass?.smallDiameterMm);
+      const steppedLargeSectionThicknessMm = toPositive(glass?.largeSectionThicknessMm);
+      const steppedSmallSectionThicknessMm = toPositive(glass?.smallSectionThicknessMm);
       const steppedProfile =
         glass?.hasSteppedProfile &&
-        toPositive(glass.largeDiameterMm) > 0 &&
-        toPositive(glass.smallDiameterMm) > 0 &&
-        toPositive(glass.largeSectionThicknessMm) > 0 &&
-        toPositive(glass.smallSectionThicknessMm) > 0
+        steppedLargeDiameterMm > 0 &&
+        steppedSmallDiameterMm > 0 &&
+        steppedLargeSectionThicknessMm > 0 &&
+        steppedSmallSectionThicknessMm > 0
           ? {
-              largeDiameterMm: glass.largeDiameterMm,
-              smallDiameterMm: glass.smallDiameterMm,
-              largeSectionThicknessMm: glass.largeSectionThicknessMm,
-              smallSectionThicknessMm: glass.smallSectionThicknessMm,
+              largeDiameterMm: steppedLargeDiameterMm,
+              smallDiameterMm: steppedSmallDiameterMm,
+              largeSectionThicknessMm: steppedLargeSectionThicknessMm,
+              smallSectionThicknessMm: steppedSmallSectionThicknessMm,
               stepDirection: glass.stepDirection ?? "unknown"
             }
           : undefined;
