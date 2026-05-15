@@ -59,6 +59,20 @@ export type ElementCupParams = {
   glassDiameterMm: number;
   glassThicknessMm: number;
   steppedProfile?: SteppedCupProfile;
+  advancedProfile?: {
+    enabled: boolean;
+    totalLengthMm: number;
+    maxDiameterMm: number;
+    maxDiameterPositionFromFrontMm: number;
+    sections: Array<{
+      id: string;
+      index: number;
+      label?: string;
+      diameterMm: number;
+      lengthMm: number;
+    }>;
+    rearClearHoleMm?: number;
+  };
   profileSegments?: Array<{
     name?: string;
     diameterMm: number;

@@ -17,7 +17,7 @@ import { generateFreecadMacro, type FreecadPayload } from "@/lib/freecad";
 import { safeFileName } from "@/lib/ids";
 import { generateScad, type ScadPayload } from "@/lib/scad";
 import { downloadTextFile } from "@/lib/storage";
-import type { LensProject, StackItem } from "@/types";
+import type { ElementCupParams, LensProject, StackItem } from "@/types";
 
 const DEFAULT_PL_STEP_RELATIVE_PATH = "cad/reference/PL_Lens_Tail.STEP";
 const DEFAULT_PL_STL_RELATIVE_PATH = "cad/reference/PL_Lens_Tail.stl";
@@ -171,6 +171,77 @@ function estimateMainBarrelLengthMm(project: LensProject, source?: StackItem): n
   return Number(Math.max(36, Math.min(estimated, 120)).toFixed(1));
 }
 
+function normalizeAdvancedProfileForCup(
+  glass?: Extract<StackItem, { type: "glass" }>
+): ElementCupParams["advancedProfile"] | undefined {
+  const advanced = glass?.advancedProfile;
+  if (!advanced) return undefined;
+  return {
+    enabled: Boolean(advanced.enabled),
+    totalLengthMm: Number.isFinite(advanced.totalLengthMm) ? advanced.totalLengthMm : 0,
+    maxDiameterMm: Number.isFinite(advanced.maxDiameterMm) ? advanced.maxDiameterMm : 0,
+    maxDiameterPositionFromFrontMm: Number.isFinite(advanced.maxDiameterPositionFromFrontMm)
+      ? advanced.maxDiameterPositionFromFrontMm
+      : 0,
+    sections: (advanced.sections ?? []).map((section, index) => ({
+      id: section.id,
+      index,
+      label: section.label,
+      diameterMm: Number.isFinite(section.diameterMm) ? section.diameterMm : 0,
+      lengthMm: Number.isFinite(section.lengthMm) ? section.lengthMm : 0
+    }))
+  };
+}
+
+function getAdvancedProfileSectionSum(profile: ElementCupParams["advancedProfile"] | undefined): number {
+  if (!profile?.sections?.length) return 0;
+  return profile.sections.reduce((sum, section) => sum + toPositive(section.lengthMm), 0);
+}
+
+function buildInsertionSafeBoreSections(
+  profile: ElementCupParams["advancedProfile"] | undefined,
+  seatClearanceMm: number
+): Array<{ zStartMm: number; zEndMm: number; diameterMm: number }> {
+  if (!profile?.enabled) return [];
+  const sections = (profile.sections ?? [])
+    .slice()
+    .sort((a, b) => a.index - b.index)
+    .filter((section) => toPositive(section.diameterMm) > 0 && toPositive(section.lengthMm) > 0);
+  if (!sections.length || toPositive(profile.maxDiameterMm) <= 0) return [];
+
+  let maxSectionIndex = 0;
+  let smallestDelta = Number.POSITIVE_INFINITY;
+  sections.forEach((section, index) => {
+    const delta = Math.abs(section.diameterMm - profile.maxDiameterMm);
+    if (delta < smallestDelta) {
+      smallestDelta = delta;
+      maxSectionIndex = index;
+    }
+  });
+
+  const bores: Array<{ zStartMm: number; zEndMm: number; diameterMm: number }> = [];
+  let z = 0;
+  sections.forEach((section, index) => {
+    const zStart = z;
+    const zEnd = z + section.lengthMm;
+    z = zEnd;
+    const measuredDiameter = index <= maxSectionIndex ? profile.maxDiameterMm : section.diameterMm;
+    const boreDiameter = measuredDiameter + seatClearanceMm;
+    const previous = bores[bores.length - 1];
+    if (previous && Math.abs(previous.diameterMm - boreDiameter) < 0.0001) {
+      previous.zEndMm = zEnd;
+      return;
+    }
+    bores.push({
+      zStartMm: zStart,
+      zEndMm: zEnd,
+      diameterMm: boreDiameter
+    });
+  });
+
+  return bores;
+}
+
 function createPayload(project: LensProject, partType: CadPartType, source?: StackItem): ScadPayload {
   const defaults = project.cadDefaults;
   const sourceName = source?.name ?? "part";
@@ -200,11 +271,32 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
   switch (partType) {
     case "element_cup": {
       const glass = source?.type === "glass" ? source : undefined;
-      const profileSegments = glass?.advancedProfileEnabled
-        ? (glass.profileSegments ?? []).filter(
-            (segment) => segment.diameterMm > 0 && segment.depthMm > 0
-          )
-        : [];
+      const advancedProfile = normalizeAdvancedProfileForCup(glass);
+      const steppedProfile =
+        glass?.hasSteppedProfile &&
+        toPositive(glass.largeDiameterMm) > 0 &&
+        toPositive(glass.smallDiameterMm) > 0 &&
+        toPositive(glass.largeSectionThicknessMm) > 0 &&
+        toPositive(glass.smallSectionThicknessMm) > 0
+          ? {
+              largeDiameterMm: glass.largeDiameterMm,
+              smallDiameterMm: glass.smallDiameterMm,
+              largeSectionThicknessMm: glass.largeSectionThicknessMm,
+              smallSectionThicknessMm: glass.smallSectionThicknessMm,
+              stepDirection: glass.stepDirection ?? "unknown"
+            }
+          : undefined;
+      const profileSegments = advancedProfile?.enabled
+        ? (advancedProfile.sections ?? [])
+            .filter((section) => section.diameterMm > 0 && section.lengthMm > 0)
+            .map((section) => ({
+              name: section.label,
+              diameterMm: section.diameterMm,
+              depthMm: section.lengthMm
+            }))
+        : glass?.advancedProfileEnabled
+          ? (glass.profileSegments ?? []).filter((segment) => segment.diameterMm > 0 && segment.depthMm > 0)
+          : [];
       const profileDepth =
         profileSegments.length > 0
           ? profileSegments.reduce((sum, segment) => sum + segment.depthMm, 0)
@@ -239,6 +331,8 @@ function createPayload(project: LensProject, partType: CadPartType, source?: Sta
           partName,
           glassDiameterMm,
           glassThicknessMm: profileDepth ?? glass?.thicknessMm ?? defaults.partThicknessMm,
+          steppedProfile,
+          advancedProfile,
           profileSegments: profileSegments.length ? profileSegments : undefined,
           seatClearanceMm,
           wallThicknessMm: Number(resolvedWallThickness.toFixed(3)),
@@ -616,6 +710,28 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.wall_thickness = `${pretty(payload.params.wallThicknessMm)} mm`;
       values.outer_diameter = `${pretty(payload.params.outerDiameterMm ?? 0)} mm`;
       values.profile_segments = payload.params.profileSegments?.length ?? 0;
+      if (payload.params.advancedProfile?.enabled) {
+        const sectionSum = getAdvancedProfileSectionSum(payload.params.advancedProfile);
+        const lengthDifference = payload.params.advancedProfile.totalLengthMm - sectionSum;
+        const boreSections = buildInsertionSafeBoreSections(
+          payload.params.advancedProfile,
+          payload.params.seatClearanceMm
+        );
+        values.advanced_profile_enabled = "yes";
+        values.totalLengthMm = `${pretty(payload.params.advancedProfile.totalLengthMm)} mm`;
+        values.maxDiameterMm = `${pretty(payload.params.advancedProfile.maxDiameterMm)} mm`;
+        values.maxDiameterPositionFromFrontMm = `${pretty(payload.params.advancedProfile.maxDiameterPositionFromFrontMm)} mm`;
+        values.section_length_sum = `${pretty(sectionSum)} mm`;
+        values.length_difference = `${pretty(lengthDifference)} mm`;
+        values.number_of_sections = payload.params.advancedProfile.sections.length;
+        values.insertionSafe = boreSections.length > 0;
+        values.bore_sections_generated =
+          boreSections.length > 0
+            ? boreSections
+                .map((section) => `z ${pretty(section.zStartMm)}-${pretty(section.zEndMm)} d ${pretty(section.diameterMm)}`)
+                .join(" | ")
+            : "none";
+      }
       return values;
     }
 

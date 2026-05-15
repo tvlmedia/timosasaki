@@ -1,6 +1,23 @@
 import type { ElementCupParams } from "@/types";
 import { n, scadHeader } from "@/lib/scad/utils";
 
+type AdvancedProfileSection = NonNullable<ElementCupParams["advancedProfile"]>["sections"][number];
+
+type BoreSection = {
+  zStartMm: number;
+  lengthMm: number;
+  measuredDiameterMm: number;
+};
+
+function toPositive(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
+  return value;
+}
+
+function formatScadString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 function hasCompleteSteppedProfile(params: ElementCupParams): boolean {
   const stepped = params.steppedProfile;
   if (!stepped) return false;
@@ -13,7 +30,202 @@ function hasCompleteSteppedProfile(params: ElementCupParams): boolean {
   );
 }
 
+function getAdvancedSections(params: ElementCupParams): AdvancedProfileSection[] {
+  const sections = params.advancedProfile?.sections ?? [];
+  return sections
+    .slice()
+    .sort((a, b) => a.index - b.index)
+    .filter((section) => toPositive(section.diameterMm) > 0 && toPositive(section.lengthMm) > 0);
+}
+
+function hasCompleteAdvancedProfile(params: ElementCupParams): boolean {
+  if (!params.advancedProfile?.enabled) return false;
+  if (toPositive(params.advancedProfile.maxDiameterMm) <= 0) return false;
+  if (toPositive(params.advancedProfile.totalLengthMm) <= 0) return false;
+  const sections = getAdvancedSections(params);
+  if (!sections.length) return false;
+  return sections.length === (params.advancedProfile.sections ?? []).length;
+}
+
+function buildInsertionSafeBoreSections(
+  sections: AdvancedProfileSection[],
+  maxDiameterMm: number
+): { sections: BoreSection[]; maxSectionIndex: number; sectionSumMm: number } {
+  let maxSectionIndex = 0;
+  let smallestDelta = Number.POSITIVE_INFINITY;
+
+  sections.forEach((section, index) => {
+    const delta = Math.abs(section.diameterMm - maxDiameterMm);
+    if (delta < smallestDelta) {
+      smallestDelta = delta;
+      maxSectionIndex = index;
+    }
+  });
+
+  const merged: BoreSection[] = [];
+  let z = 0;
+  sections.forEach((section, index) => {
+    const boreMeasuredDiameter = index <= maxSectionIndex ? maxDiameterMm : section.diameterMm;
+    const boreLength = section.lengthMm;
+    const previous = merged[merged.length - 1];
+
+    if (previous && Math.abs(previous.measuredDiameterMm - boreMeasuredDiameter) < 0.0001) {
+      previous.lengthMm += boreLength;
+      z += boreLength;
+      return;
+    }
+
+    merged.push({
+      zStartMm: z,
+      lengthMm: boreLength,
+      measuredDiameterMm: boreMeasuredDiameter
+    });
+    z += boreLength;
+  });
+
+  return {
+    sections: merged,
+    maxSectionIndex,
+    sectionSumMm: z
+  };
+}
+
+function generateAdvancedProfileScad(params: ElementCupParams): string {
+  const advanced = params.advancedProfile!;
+  const sections = getAdvancedSections(params);
+  const maxDiameterMm = toPositive(advanced.maxDiameterMm);
+  const seatClearanceMm = params.seatClearanceMm;
+  const wallThicknessMm = params.wallThicknessMm;
+  const rearLipMm = params.rearLipMm;
+  const sectionData = buildInsertionSafeBoreSections(sections, maxDiameterMm);
+  const sectionSumMm = sectionData.sectionSumMm;
+  const lengthDifferenceMm = advanced.totalLengthMm - sectionSumMm;
+  const extraDepthMm = Math.max((params.cupDepthMm ?? sectionSumMm + rearLipMm + 0.5) - (sectionSumMm + rearLipMm), 0);
+  const cupDepthMm = sectionSumMm + rearLipMm + extraDepthMm;
+  const outerDiameterMm = maxDiameterMm + seatClearanceMm + wallThicknessMm * 2;
+
+  const lastMeasuredDiameter = sections[sections.length - 1]?.diameterMm ?? maxDiameterMm;
+  const defaultRearClearHoleMm = Math.max(lastMeasuredDiameter - 1, 0.4);
+  const requestedRearClearHoleMm = Math.max(advanced.rearClearHoleMm ?? defaultRearClearHoleMm, 0.4);
+  const lastBoreDiameterMm =
+    (sectionData.sections[sectionData.sections.length - 1]?.measuredDiameterMm ?? maxDiameterMm) + seatClearanceMm;
+  const rearClearHoleMm = Math.max(0.4, Math.min(requestedRearClearHoleMm, lastBoreDiameterMm - 0.2));
+
+  const sectionVars = sections
+    .map(
+      (section, index) => `s${index + 1}_label = "${formatScadString(section.label || `Section ${index + 1}`)}";
+s${index + 1}_d = ${n(section.diameterMm)};
+s${index + 1}_l = ${n(section.lengthMm)};`
+    )
+    .join("\n\n");
+
+  const boreVars = sectionData.sections
+    .map(
+      (section, index) => `bore${index + 1}_measured_d = ${n(section.measuredDiameterMm)};
+bore${index + 1}_d = bore${index + 1}_measured_d + seat_clearance;
+bore${index + 1}_z = ${n(section.zStartMm)};
+bore${index + 1}_l = ${n(section.lengthMm)};`
+    )
+    .join("\n\n");
+
+  const boreCutCalls = sectionData.sections
+    .map((_, index) => {
+      const isLast = index === sectionData.sections.length - 1;
+      return `    bore_cutter(bore${index + 1}_z, bore${index + 1}_l${isLast ? " + extra_depth" : ""}, bore${index + 1}_d);`;
+    })
+    .join("\n");
+
+  const debugBores = sectionData.sections
+    .map(
+      (section, index) =>
+        `echo("Bore ${index + 1}: z ", ${n(section.zStartMm)}, " to ", ${n(section.zStartMm + section.lengthMm)}, " d ", bore${index + 1}_d);`
+    )
+    .join("\n");
+
+  return `${scadHeader(params.partName, params.facets)}// Timo Sasaki Lens Lab - insertion-safe stepped lens cup
+// Z=0 = front / insertion side
+// Positive Z = toward rear / sensor side
+// Bore before and through max diameter section uses max diameter so the lens block can physically slide into the cup.
+
+show_cutaway = false;
+
+total_length = ${n(advanced.totalLengthMm)};
+max_diameter = ${n(maxDiameterMm)};
+max_diameter_starts_at = ${n(advanced.maxDiameterPositionFromFrontMm)};
+
+${sectionVars}
+
+seat_clearance = ${n(seatClearanceMm)};
+wall_thickness = ${n(wallThicknessMm)};
+rear_lip = ${n(rearLipMm)};
+extra_depth = ${n(extraDepthMm)};
+section_sum = ${n(sectionSumMm)};
+length_difference = total_length - section_sum;
+max_d = max_diameter;
+
+outer_diameter = ${n(outerDiameterMm)};
+cup_depth = section_sum + rear_lip + extra_depth;
+
+${boreVars}
+
+rear_clear_hole_requested = ${n(requestedRearClearHoleMm)};
+last_bore_d = ${n(lastBoreDiameterMm)};
+rear_clear_hole = ${n(rearClearHoleMm)};
+
+eps = 0.05;
+
+module cup_outer() {
+  cylinder(h = cup_depth, d = outer_diameter);
+}
+
+module bore_cutter(z, h, d) {
+  translate([0, 0, z - eps])
+    cylinder(h = h + eps * 2, d = d);
+}
+
+module rear_clear_hole_cutter() {
+  translate([0, 0, section_sum - eps])
+    cylinder(h = rear_lip + extra_depth + eps * 4, d = rear_clear_hole);
+}
+
+module cutaway() {
+  translate([0, -outer_diameter, -1])
+    cube([outer_diameter, outer_diameter * 2, cup_depth + 2]);
+}
+
+module stepped_lens_cup() {
+  difference() {
+    cup_outer();
+
+${boreCutCalls}
+
+    rear_clear_hole_cutter();
+
+    if (show_cutaway) {
+      cutaway();
+    }
+  }
+}
+
+stepped_lens_cup();
+
+echo("Section sum = ", section_sum);
+echo("Total length = ", total_length);
+echo("Length difference = ", length_difference);
+echo("Max diameter = ", max_d);
+echo("Outer diameter = ", outer_diameter);
+echo("Cup depth = ", cup_depth);
+echo("Advanced section count = ", ${sections.length});
+echo("Max section index used = ", ${sectionData.maxSectionIndex + 1});
+${debugBores}
+`;
+}
+
 export function generateElementCupScad(params: ElementCupParams): string {
+  if (hasCompleteAdvancedProfile(params)) {
+    return generateAdvancedProfileScad(params);
+  }
+
   if (hasCompleteSteppedProfile(params) && params.steppedProfile) {
     const stepped = params.steppedProfile;
     const largeSeatDiameter = stepped.largeDiameterMm + params.seatClearanceMm;

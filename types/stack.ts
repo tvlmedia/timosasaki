@@ -51,10 +51,27 @@ export type GlassProfileSegment = {
   depthMm: number;
 };
 
+export type AdvancedGlassProfileSection = {
+  id: string;
+  index: number;
+  label?: string;
+  diameterMm: number;
+  lengthMm: number;
+};
+
+export type AdvancedGlassProfile = {
+  enabled: boolean;
+  totalLengthMm: number;
+  maxDiameterMm: number;
+  maxDiameterPositionFromFrontMm: number;
+  sections: AdvancedGlassProfileSection[];
+};
+
 export type GlassItem = BaseStackItem & {
   type: "glass";
   diameterMm: number;
   thicknessMm: number;
+  advancedProfile?: AdvancedGlassProfile;
   advancedProfileEnabled?: boolean;
   profileSegments?: GlassProfileSegment[];
   edgeThicknessMm?: number;
