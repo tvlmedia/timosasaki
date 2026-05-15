@@ -16,6 +16,7 @@ import {
 import { generateFreecadMacro, type FreecadPayload } from "@/lib/freecad";
 import { safeFileName } from "@/lib/ids";
 import { generateScad, type ScadPayload } from "@/lib/scad";
+import { generateFixedPlBarrelWithSlotsPushPullV4Scad } from "@/lib/scad/fixedPlBarrelWithSlots";
 import { downloadTextFile } from "@/lib/storage";
 import type { ElementCupParams, LensProject, StackItem } from "@/types";
 
@@ -685,7 +686,9 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       ? freecadPayload
         ? generateFreecadMacro(freecadPayload)
         : "# FreeCAD macro export is available for element cups, spacer rings, fixed PL barrel with slots, and sliding optical carrier."
-      : generateScad(payload);
+      : payload.type === "fixed_pl_barrel_with_slots"
+        ? generateFixedPlBarrelWithSlotsPushPullV4Scad(payload.params)
+        : generateScad(payload);
   const exportModeWarnings = [
     ...(exportMode === "freecad_macro" && !freecadPayload
       ? [
