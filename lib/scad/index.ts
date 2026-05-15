@@ -13,7 +13,7 @@ import type {
 import { generateCamSleeveScad } from "@/lib/scad/camSleeve";
 import { generateDiffusionHolderScad } from "@/lib/scad/diffusionHolder";
 import { generateElementCupScad } from "@/lib/scad/elementCup";
-import { generateFixedPlBarrelWithSlotsScad } from "@/lib/scad/fixedPlBarrelWithSlots";
+import { generateFixedPlBarrelWithSlotsPushPullV4Scad } from "@/lib/scad/fixedPlBarrelWithSlots";
 import { generateIrisDiskScad } from "@/lib/scad/irisDisk";
 import { generateMainBarrelScad } from "@/lib/scad/mainBarrel";
 import { generateMovingCarrierScad } from "@/lib/scad/movingCarrier";
@@ -25,7 +25,7 @@ export {
   generateCamSleeveScad,
   generateDiffusionHolderScad,
   generateElementCupScad,
-  generateFixedPlBarrelWithSlotsScad,
+  generateFixedPlBarrelWithSlotsPushPullV4Scad,
   generateIrisDiskScad,
   generateMainBarrelScad,
   generateMovingCarrierScad,
@@ -65,7 +65,7 @@ export function generateScad(payload: ScadPayload): string {
     case "cam_sleeve":
       return generateCamSleeveScad(payload.params);
     case "fixed_pl_barrel_with_slots":
-      return generateFixedPlBarrelWithSlotsScad(payload.params);
+      return generateFixedPlBarrelWithSlotsPushPullV4Scad(payload.params);
     case "sliding_optical_carrier":
       return generateSlidingOpticalCarrierScad(payload.params);
     default:

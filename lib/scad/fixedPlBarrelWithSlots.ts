@@ -1,7 +1,7 @@
 import type { FixedPLBarrelWithSlotsParams } from "@/types";
 import { n } from "@/lib/scad/utils";
 
-export function generateFixedPlBarrelWithSlotsScad(params: FixedPLBarrelWithSlotsParams): string {
+export function generateFixedPlBarrelWithSlotsPushPullV4Scad(params: FixedPLBarrelWithSlotsParams): string {
   const slotCount = Math.max(1, Math.floor(params.slotCount));
   const includePlMountInPart = params.includePlReferenceMount ?? true;
   const showGuidePins = false;
