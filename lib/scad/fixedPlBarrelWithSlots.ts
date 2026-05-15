@@ -14,11 +14,15 @@ export function generateFixedPlBarrelWithSlotsPushPullV4Scad(params: FixedPLBarr
   const barrelInnerDiameter = Math.max(1, params.mainBarrelInnerDiameterMm || params.innerDiameterMm);
   const plClearanceOuterDiameter = Math.max(
     1,
-    (params.plLockingClearanceDiameterMm && params.plLockingClearanceDiameterMm > 0
-      ? params.plLockingClearanceDiameterMm
-      : params.rearNeckOuterDiameterMm) || params.outerDiameterMm
+    params.plClearanceOuterDiameterMm ??
+      ((params.plLockingClearanceDiameterMm && params.plLockingClearanceDiameterMm > 0
+        ? params.plLockingClearanceDiameterMm
+        : params.rearNeckOuterDiameterMm) || params.outerDiameterMm)
   );
-  const plClearanceLength = Math.max(0.1, params.plLockingClearanceLengthMm || params.rearNeckLengthMm || 4.0);
+  const plClearanceLength = Math.max(
+    0.1,
+    params.plClearanceLengthMm ?? params.plLockingClearanceLengthMm ?? params.rearNeckLengthMm ?? 4.0
+  );
   const mainBarrelOuterDiameter = Math.max(
     plClearanceOuterDiameter,
     params.mainBarrelOuterDiameterMm || params.outerDiameterMm
@@ -26,9 +30,12 @@ export function generateFixedPlBarrelWithSlotsPushPullV4Scad(params: FixedPLBarr
   const mainBarrelLength = Math.max(0.1, params.mainBarrelLengthMm || params.lengthMm);
 
   const reliefToMainOverlap = 1.2;
-  const slotStartFromMainBarrel = Math.max(0, (params.slotStartZMm ?? 0) - plClearanceLength);
+  const slotStartFromMainBarrel = Math.max(
+    0,
+    params.slotStartFromMainBarrelMm ?? ((params.slotStartZMm ?? 0) - plClearanceLength)
+  );
   const wallThickness = Math.max(0.1, (mainBarrelOuterDiameter - barrelInnerDiameter) / 2);
-  const slotCutDepth = Math.max(8.0, wallThickness * 3);
+  const slotCutDepth = Math.max(0.1, params.slotCutDepthMm ?? Math.max(9.0, wallThickness * 3));
   const slotWidth = Math.max(0.2, params.slotWidthMm || params.pinDiameterMm + params.pinClearanceMm);
   const pinDiameter = Math.max(0.1, params.pinDiameterMm);
   const pinClearance = Math.max(0, params.pinClearanceMm);

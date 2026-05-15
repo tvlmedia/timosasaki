@@ -259,7 +259,6 @@ function createPayload(
   const plRearNeckLength = defaults.plRearNeckLengthMm ?? 12.0;
   const plLockClearanceLength = defaults.plLockingClearanceLengthMm ?? 12.0;
   const plLockClearanceDiameter = defaults.plLockingClearanceDiameterMm ?? 42.0;
-  const plMainBarrelOuterDefault = defaults.plMainBarrelOuterDiameterMm ?? 44.0;
   const plMainBarrelInnerDefault = defaults.plMainBarrelInnerDiameterMm ?? 40.0;
   const plMainBarrelLengthDefault = defaults.plMainBarrelLengthMm ?? 50.0;
   const plStepUpStart = defaults.plStepUpStartFromFlangeMm ?? 12.0;
@@ -428,10 +427,14 @@ function createPayload(
         plMainBarrelInnerDefault,
         Number(recommendedInner.toFixed(3))
       );
-      const mainBarrelOuter = Math.max(
-        plMainBarrelOuterDefault,
-        Number((mainBarrelInner + defaults.wallThicknessMm * 2).toFixed(3))
-      );
+      const defaultMainBarrelOuter = Number((mainBarrelInner + 4.0).toFixed(3));
+      const requestedMainBarrelOuter = Number.isFinite(defaults.plMainBarrelOuterDiameterMm ?? Number.NaN)
+        ? (defaults.plMainBarrelOuterDiameterMm as number)
+        : undefined;
+      const mainBarrelOuter =
+        typeof requestedMainBarrelOuter === "number" && requestedMainBarrelOuter > mainBarrelInner
+          ? Number(requestedMainBarrelOuter.toFixed(3))
+          : defaultMainBarrelOuter;
       const pinDiameter = plPinDiameter;
       const pinClearance = plPinClearance;
       const slotWidth = Number((pinDiameter + pinClearance).toFixed(3));
@@ -440,13 +443,26 @@ function createPayload(
           (focusDerived.recommendedPrototypeTravelMm ?? plSlotLengthManual) + 2
         ).toFixed(3)
       );
+      const defaultPlClearanceOuter = Number((mainBarrelInner + 1.5).toFixed(3));
+      const requestedPlClearanceOuter = Number.isFinite(defaults.plClearanceOuterDiameterMm ?? Number.NaN)
+        ? (defaults.plClearanceOuterDiameterMm as number)
+        : undefined;
+      const plClearanceOuterDiameter = Number(
+        (
+          typeof requestedPlClearanceOuter === "number"
+            ? Math.max(requestedPlClearanceOuter, mainBarrelInner + 0.01)
+            : defaultPlClearanceOuter
+        ).toFixed(3)
+      );
+      const plClearanceLength = Math.max(0.1, defaults.plClearanceLengthMm ?? 4.0);
+      const slotStartFromMainBarrel = Math.max(0, defaults.plSlotStartFromMainBarrelMm ?? 8.0);
       const stepUpStart = Math.max(
         plLockClearanceLength,
         plStepUpStart
       );
       const mainBarrelLength = Math.max(
-        plMainBarrelLengthDefault,
-        estimateMainBarrelLengthMm(project, source)
+        64.0,
+        plMainBarrelLengthDefault
       );
       const totalLength = Number((stepUpStart + mainBarrelLength).toFixed(3));
       const plReferenceStlPath = derivePlStlPathFromStepPath(defaults.plStepReferencePath);
@@ -459,7 +475,7 @@ function createPayload(
       const plReferenceFlipY = false;
       const plReferenceFlipZ = false;
       const plReferenceOverlapMm = Math.max(
-        0,
+        2.0,
         Number.isFinite(fixedPlOverrides?.plOverlapMm ?? Number.NaN)
           ? (fixedPlOverrides?.plOverlapMm as number)
           : (project.cadDefaults.plReferenceOverlapMm ?? 2.0)
@@ -480,6 +496,8 @@ function createPayload(
           mainBarrelOuterDiameterMm: mainBarrelOuter,
           mainBarrelInnerDiameterMm: mainBarrelInner,
           mainBarrelLengthMm: mainBarrelLength,
+          plClearanceOuterDiameterMm: plClearanceOuterDiameter,
+          plClearanceLengthMm: plClearanceLength,
           plLockingClearanceLengthMm: plLockClearanceLength,
           plLockingClearanceDiameterMm: plLockClearanceDiameter,
           stepUpStartFromPLFlangeMm: stepUpStart,
@@ -488,6 +506,8 @@ function createPayload(
           slotLengthMm: Math.max(slotLength, 6),
           slotWidthMm: slotWidth,
           slotStartZMm: plSlotStartZ,
+          slotStartFromMainBarrelMm: slotStartFromMainBarrel,
+          slotCutDepthMm: 9.0,
           pinDiameterMm: pinDiameter,
           pinClearanceMm: pinClearance,
           includePlReferenceMount: true,
@@ -630,7 +650,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     project.cadDefaults.plBarrelAttachZMm ?? 0.0
   );
   const [fixedPlOverlapMm, setFixedPlOverlapMm] = useState<number>(
-    project.cadDefaults.plReferenceOverlapMm ?? 2.0
+    Math.max(2.0, project.cadDefaults.plReferenceOverlapMm ?? 2.0)
   );
   const plAssemblyIncludeMain = project.cadDefaults.plAssemblyIncludeMainBarrelSection ?? true;
   const plAssemblyIncludeCarrier = project.cadDefaults.plAssemblyIncludeMovingCarrier ?? true;
@@ -654,7 +674,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
 
   useEffect(() => {
     setFixedPlBarrelAttachZMm(project.cadDefaults.plBarrelAttachZMm ?? 0.0);
-    setFixedPlOverlapMm(project.cadDefaults.plReferenceOverlapMm ?? 2.0);
+    setFixedPlOverlapMm(Math.max(2.0, project.cadDefaults.plReferenceOverlapMm ?? 2.0));
   }, [project.cadDefaults.plBarrelAttachZMm, project.cadDefaults.plReferenceOverlapMm]);
 
   const sourceItem = sourceCandidates.find((item) => item.id === sourceItemId);
@@ -719,6 +739,12 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       : payload.type === "fixed_pl_barrel_with_slots"
         ? generateFixedPlBarrelWithSlotsPushPullV4Scad(payload.params)
         : generateScad(payload);
+  const fixedPlClearanceValidationWarning =
+    payload.type === "fixed_pl_barrel_with_slots" &&
+    Number.isFinite(project.cadDefaults.plClearanceOuterDiameterMm ?? Number.NaN) &&
+    (project.cadDefaults.plClearanceOuterDiameterMm as number) <= payload.params.mainBarrelInnerDiameterMm
+      ? "PL clearance outer diameter must be larger than barrel inner diameter."
+      : null;
   const exportModeWarnings = [
     ...(exportMode === "freecad_macro" && !freecadPayload
       ? [
@@ -731,7 +757,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
           "If the PL shape is missing, verify pl_reference_stl_path points to a valid local STL file.",
           "For exact STEP alignment + full assembly workflow, use FreeCAD Assembly Macro with PL STEP."
         ]
-      : [])
+      : []),
+    ...(fixedPlClearanceValidationWarning ? [fixedPlClearanceValidationWarning] : [])
   ];
   const partWarnings = sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : [];
 
@@ -944,11 +971,11 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
             <NumberInput
               label="pl_overlap (mm)"
               value={fixedPlOverlapMm}
-              min={0}
+              min={2}
               step={0.1}
               onChange={(event) =>
                 setFixedPlOverlapMm(
-                  Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : 0
+                  Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : 2
                 )
               }
             />
