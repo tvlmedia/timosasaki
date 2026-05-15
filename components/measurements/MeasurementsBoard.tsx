@@ -10,6 +10,7 @@ import { projectStackHref } from "@/lib/routes";
 import { createId, safeFileName } from "@/lib/ids";
 import { downloadTextFile } from "@/lib/storage";
 import type {
+  AdvancedPhysicalProfile,
   CalibrationReferenceGeometry,
   CalibrationReferenceType,
   ElementOrientation,
@@ -295,6 +296,51 @@ function createGlassDefaultFields(index: number): MeasurementFields {
   };
 }
 
+function sanitizeSegmentValue(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, value);
+}
+
+function createDefaultAdvancedProfileForMeasurementFields(fields: MeasurementFields): AdvancedPhysicalProfile {
+  return {
+    enabled: false,
+    totalLengthMm: Number(Math.max(0, toPositive(fields.thicknessMm)).toFixed(2)),
+    maxDiameterMm: Number(Math.max(0, toPositive(fields.diameterMm)).toFixed(2)),
+    maxDiameterPositionFromFrontMm: 0,
+    sections: []
+  };
+}
+
+function normalizeAdvancedProfileSections(
+  sections: AdvancedPhysicalProfile["sections"] | undefined
+): AdvancedPhysicalProfile["sections"] {
+  return (sections ?? []).map((section, index) => ({
+    id: section.id || createId("profile"),
+    index,
+    label: section.label,
+    diameterMm: Number.isFinite(section.diameterMm) ? section.diameterMm : 0,
+    lengthMm: Number.isFinite(section.lengthMm) ? section.lengthMm : 0
+  }));
+}
+
+function normalizeMeasurementAdvancedProfile(fields: MeasurementFields): AdvancedPhysicalProfile {
+  const source = fields.advancedProfile ?? createDefaultAdvancedProfileForMeasurementFields(fields);
+  return {
+    enabled: Boolean(source.enabled),
+    totalLengthMm: Number.isFinite(source.totalLengthMm) ? source.totalLengthMm : 0,
+    maxDiameterMm: Number.isFinite(source.maxDiameterMm) ? source.maxDiameterMm : 0,
+    maxDiameterPositionFromFrontMm: Number.isFinite(source.maxDiameterPositionFromFrontMm)
+      ? source.maxDiameterPositionFromFrontMm
+      : 0,
+    sections: normalizeAdvancedProfileSections(source.sections)
+  };
+}
+
+function getAdvancedProfileSectionSum(profile: AdvancedPhysicalProfile | undefined): number {
+  if (!profile?.sections?.length) return 0;
+  return profile.sections.reduce((sum, section) => sum + toPositive(section.lengthMm), 0);
+}
+
 function getDefaultFields(type: MeasurementItemType, countOfType: number): MeasurementFields {
   if (type === "glass") return createGlassDefaultFields(countOfType);
   if (type === "spacer_ring") {
@@ -549,6 +595,20 @@ function mapAnnotationToStackItem(
 
     const physicalComponentMode = getPhysicalMode(fields);
     const steppedSegments = buildSteppedProfileSegmentsFromMeasurementFields(fields);
+    const advancedProfile = fields.advancedProfile
+      ? normalizeMeasurementAdvancedProfile(fields)
+      : undefined;
+    const advancedSegments = advancedProfile?.enabled
+      ? normalizeAdvancedProfileSections(advancedProfile.sections).map((section, index) => ({
+          id: section.id || createId("profile"),
+          name: section.label?.trim() || `Segment ${index + 1}`,
+          diameterMm: toPositive(section.diameterMm),
+          depthMm: toPositive(section.lengthMm)
+        }))
+      : [];
+    const profileSegments = advancedProfile?.enabled
+      ? advancedSegments.filter((segment) => segment.diameterMm > 0 && segment.depthMm > 0)
+      : steppedSegments;
     const normalizedSubElements =
       physicalComponentMode === "optical_group"
         ? (fields.opticalSubElements ?? [])
@@ -575,8 +635,20 @@ function mapAnnotationToStackItem(
       sourceBaselineComponentId: options?.sourceBaselineComponentId,
       diameterMm: fields.diameterMm,
       thicknessMm: fields.thicknessMm,
-      advancedProfileEnabled: steppedSegments.length > 0,
-      profileSegments: steppedSegments.length > 0 ? steppedSegments : undefined,
+      advancedProfile: advancedProfile
+        ? {
+            ...advancedProfile,
+            sections: normalizeAdvancedProfileSections(advancedProfile.sections).map((section, index) => ({
+              ...section,
+              index,
+              label: section.label?.trim() || undefined,
+              diameterMm: sanitizeSegmentValue(section.diameterMm),
+              lengthMm: sanitizeSegmentValue(section.lengthMm)
+            }))
+          }
+        : undefined,
+      advancedProfileEnabled: advancedProfile?.enabled ? true : steppedSegments.length > 0,
+      profileSegments: profileSegments.length > 0 ? profileSegments : undefined,
       edgeThicknessMm: fields.edgeThicknessMm,
       clearApertureMm: fields.clearApertureMm,
       flipped: fields.orientation === "flipped",
@@ -894,6 +966,21 @@ export function MeasurementsBoard({
   const baselineComponentIdByAnnotationId = useMemo(() => {
     return getBaselineComponentIdMap(project.originalLensBaseline);
   }, [project.originalLensBaseline?.physicalComponents]);
+  const selectedAdvancedProfile =
+    selectedAnnotation?.itemType === "glass"
+      ? normalizeMeasurementAdvancedProfile(selectedAnnotation.fields)
+      : undefined;
+  const selectedAdvancedSections = selectedAdvancedProfile?.sections ?? [];
+  const selectedAdvancedSectionSum = selectedAdvancedProfile
+    ? getAdvancedProfileSectionSum(selectedAdvancedProfile)
+    : 0;
+  const selectedAdvancedLengthDifference = selectedAdvancedProfile
+    ? selectedAdvancedProfile.totalLengthMm - selectedAdvancedSectionSum
+    : 0;
+  const selectedAdvancedLengthDifferenceAbs = Math.abs(selectedAdvancedLengthDifference);
+  const selectedAdvancedMissingSectionValues = Boolean(selectedAdvancedProfile?.enabled) && selectedAdvancedSections.some(
+    (section) => toPositive(section.diameterMm) <= 0 || toPositive(section.lengthMm) <= 0
+  );
 
   useEffect(() => {
     if (!selectedAnnotationId && annotations[0]) {
@@ -978,6 +1065,64 @@ export function MeasurementsBoard({
         [key]: value
       }
     }));
+  };
+
+  const updateSelectedAdvancedProfile = (
+    updater: (profile: AdvancedPhysicalProfile, fields: MeasurementFields) => AdvancedPhysicalProfile
+  ) => {
+    if (!selectedAnnotation || selectedAnnotation.itemType !== "glass") return;
+    updateSelectedAnnotation((annotation) => {
+      const currentProfile = normalizeMeasurementAdvancedProfile(annotation.fields);
+      const nextProfile = updater(currentProfile, annotation.fields);
+      return {
+        ...annotation,
+        fields: {
+          ...annotation.fields,
+          advancedProfile: {
+            ...nextProfile,
+            sections: normalizeAdvancedProfileSections(nextProfile.sections)
+          }
+        }
+      };
+    });
+  };
+
+  const setAdvancedProfileEnabled = (enabled: boolean) => {
+    updateSelectedAdvancedProfile((profile, fields) => {
+      const fallback = createDefaultAdvancedProfileForMeasurementFields(fields);
+      const base = fields.advancedProfile ? profile : fallback;
+      return {
+        ...base,
+        enabled
+      };
+    });
+  };
+
+  const addAdvancedProfileSection = () => {
+    updateSelectedAdvancedProfile((profile) => ({
+      ...profile,
+      sections: normalizeAdvancedProfileSections([
+        ...profile.sections,
+        {
+          id: createId("profile"),
+          index: profile.sections.length,
+          label: `Section ${profile.sections.length + 1}`,
+          diameterMm: 0,
+          lengthMm: 0
+        }
+      ])
+    }));
+  };
+
+  const removeAdvancedProfileSection = (sectionId: string) => {
+    updateSelectedAdvancedProfile((profile) => ({
+      ...profile,
+      sections: normalizeAdvancedProfileSections(profile.sections.filter((section) => section.id !== sectionId))
+    }));
+  };
+
+  const clearAdvancedProfile = () => {
+    updateSelectedAdvancedProfile((_profile, fields) => createDefaultAdvancedProfileForMeasurementFields(fields));
   };
 
   const addOpticalSubElement = () => {
@@ -2472,6 +2617,188 @@ export function MeasurementsBoard({
                           ))}
                         </Select>
                       </>
+                    )}
+
+                    <SectionTitle>Advanced Physical Profile</SectionTitle>
+                    <label className="flex items-center gap-2 text-sm text-labMuted">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selectedAdvancedProfile?.enabled)}
+                        onChange={(event) => setAdvancedProfileEnabled(event.target.checked)}
+                      />
+                      Enable advanced profile
+                    </label>
+
+                    {selectedAdvancedProfile?.enabled && (
+                      <div className="space-y-3 rounded-xl border border-labBorder bg-[#0b0b0b] p-3">
+                        <NumberInput
+                          label="Total length mm"
+                          value={selectedAdvancedProfile.totalLengthMm ?? ""}
+                          min={0}
+                          step="0.01"
+                          onChange={(event) =>
+                            updateSelectedAdvancedProfile((profile) => ({
+                              ...profile,
+                              totalLengthMm: parseOptionalNumber(event.target.value) ?? 0
+                            }))
+                          }
+                        />
+                        <NumberInput
+                          label="Max diameter mm"
+                          value={selectedAdvancedProfile.maxDiameterMm ?? ""}
+                          min={0}
+                          step="0.01"
+                          onChange={(event) =>
+                            updateSelectedAdvancedProfile((profile) => ({
+                              ...profile,
+                              maxDiameterMm: parseOptionalNumber(event.target.value) ?? 0
+                            }))
+                          }
+                        />
+                        <NumberInput
+                          label="Max diameter starts at mm from front"
+                          value={selectedAdvancedProfile.maxDiameterPositionFromFrontMm ?? ""}
+                          min={0}
+                          step="0.01"
+                          onChange={(event) =>
+                            updateSelectedAdvancedProfile((profile) => ({
+                              ...profile,
+                              maxDiameterPositionFromFrontMm: parseOptionalNumber(event.target.value) ?? 0
+                            }))
+                          }
+                        />
+
+                        <div className="space-y-2">
+                          {selectedAdvancedSections.map((section) => (
+                            <div key={section.id} className="rounded-lg border border-labBorder bg-[#090909] p-2">
+                              <div className="mb-2 text-xs uppercase tracking-[0.12em] text-labMuted">
+                                Section {section.index + 1}
+                              </div>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <Input
+                                  label="Label"
+                                  value={section.label ?? ""}
+                                  onChange={(event) =>
+                                    updateSelectedAdvancedProfile((profile) => ({
+                                      ...profile,
+                                      sections: normalizeAdvancedProfileSections(
+                                        profile.sections.map((entry) =>
+                                          entry.id === section.id ? { ...entry, label: event.target.value } : entry
+                                        )
+                                      )
+                                    }))
+                                  }
+                                />
+                                <NumberInput
+                                  label="Diameter mm"
+                                  value={section.diameterMm ?? ""}
+                                  min={0}
+                                  step="0.01"
+                                  onChange={(event) =>
+                                    updateSelectedAdvancedProfile((profile) => ({
+                                      ...profile,
+                                      sections: normalizeAdvancedProfileSections(
+                                        profile.sections.map((entry) =>
+                                          entry.id === section.id
+                                            ? {
+                                                ...entry,
+                                                diameterMm: sanitizeSegmentValue(
+                                                  parseOptionalNumber(event.target.value) ?? 0
+                                                )
+                                              }
+                                            : entry
+                                        )
+                                      )
+                                    }))
+                                  }
+                                />
+                                <NumberInput
+                                  label="Length mm"
+                                  value={section.lengthMm ?? ""}
+                                  min={0}
+                                  step="0.01"
+                                  onChange={(event) =>
+                                    updateSelectedAdvancedProfile((profile) => ({
+                                      ...profile,
+                                      sections: normalizeAdvancedProfileSections(
+                                        profile.sections.map((entry) =>
+                                          entry.id === section.id
+                                            ? {
+                                                ...entry,
+                                                lengthMm: sanitizeSegmentValue(
+                                                  parseOptionalNumber(event.target.value) ?? 0
+                                                )
+                                              }
+                                            : entry
+                                        )
+                                      )
+                                    }))
+                                  }
+                                />
+                                <div className="flex items-end">
+                                  <Button
+                                    type="button"
+                                    variant="danger"
+                                    className="w-full"
+                                    onClick={() => removeAdvancedProfileSection(section.id)}
+                                  >
+                                    Delete
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                          {selectedAdvancedSections.length === 0 && (
+                            <p className="text-sm text-labMuted">No sections defined.</p>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          <Button type="button" variant="ghost" onClick={addAdvancedProfileSection}>
+                            Add section
+                          </Button>
+                          <Button type="button" variant="secondary" onClick={clearAdvancedProfile}>
+                            Clear profile
+                          </Button>
+                        </div>
+
+                        <div className="rounded-lg border border-labBorder bg-[#090909] p-2 text-xs">
+                          <div className="flex justify-between gap-2">
+                            <span className="text-labMuted">Section length sum</span>
+                            <span className="mono text-labText">{selectedAdvancedSectionSum.toFixed(2)} mm</span>
+                          </div>
+                          <div className="mt-1 flex justify-between gap-2">
+                            <span className="text-labMuted">Difference from total length</span>
+                            <span
+                              className={`mono ${
+                                selectedAdvancedLengthDifferenceAbs > 2
+                                  ? "text-labDanger"
+                                  : selectedAdvancedLengthDifferenceAbs > 1
+                                    ? "text-labWarning"
+                                    : "text-labText"
+                              }`}
+                            >
+                              {selectedAdvancedLengthDifference.toFixed(2)} mm
+                            </span>
+                          </div>
+                          {selectedAdvancedLengthDifferenceAbs > 2 && (
+                            <p className="mt-2 text-labDanger">Warning: difference is greater than 2.0 mm.</p>
+                          )}
+                          {selectedAdvancedLengthDifferenceAbs > 1 && selectedAdvancedLengthDifferenceAbs <= 2 && (
+                            <p className="mt-2 text-labWarning">Warning: difference is greater than 1.0 mm.</p>
+                          )}
+                          {selectedAdvancedSections.length === 0 && (
+                            <p className="mt-2 text-labWarning">
+                              Warning: advanced profile is enabled but no sections are defined.
+                            </p>
+                          )}
+                          {selectedAdvancedMissingSectionValues && (
+                            <p className="mt-2 text-labWarning">
+                              Warning: at least one section is missing diameter or length.
+                            </p>
+                          )}
+                        </div>
+                      </div>
                     )}
                   </>
                 )}

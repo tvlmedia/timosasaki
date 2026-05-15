@@ -68,6 +68,22 @@ export type SteppedProfileSegment = {
   depthMm?: number;
 };
 
+export type AdvancedPhysicalProfileSection = {
+  id: string;
+  index: number;
+  label?: string;
+  diameterMm: number;
+  lengthMm: number;
+};
+
+export type AdvancedPhysicalProfile = {
+  enabled: boolean;
+  totalLengthMm: number;
+  maxDiameterMm: number;
+  maxDiameterPositionFromFrontMm: number;
+  sections: AdvancedPhysicalProfileSection[];
+};
+
 export type MeasurementItemType = "glass" | "spacer_ring" | "housing_barrel" | "iris_disk" | "other";
 
 export type PhysicalComponentMode = "single_element" | "optical_group";
@@ -123,6 +139,7 @@ export type MeasurementFields = {
   smallSectionThicknessMm?: number;
   stepDirection?: StepDirection;
   steppedProfileSegments?: SteppedProfileSegment[];
+  advancedProfile?: AdvancedPhysicalProfile;
 
   innerDiameterMm?: number;
   outerDiameterMm?: number;
