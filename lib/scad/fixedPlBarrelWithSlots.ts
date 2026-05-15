@@ -50,13 +50,13 @@ show_guide_pins = ${showGuidePins ? "true" : "false"};
 
 pl_reference_stl_path = "${plReferenceStlPath}";
 
-pl_reference_offset_x = ${n(params.plReferenceOffsetXMm)};
-pl_reference_offset_y = ${n(params.plReferenceOffsetYMm)};
-pl_reference_offset_z = ${n(params.plReferenceOffsetZMm)};
+pl_reference_offset_x = ${n(params.plReferenceOffsetXMm ?? 0)};
+pl_reference_offset_y = ${n(params.plReferenceOffsetYMm ?? 0)};
+pl_reference_offset_z = ${n(params.plReferenceOffsetZMm ?? 0)};
 
-pl_reference_rotate_x_deg = ${n(params.plReferenceRotateXDeg)};
-pl_reference_rotate_y_deg = ${n(params.plReferenceRotateYDeg)};
-pl_reference_rotate_z_deg = ${n(params.plReferenceRotateZDeg)};
+pl_reference_rotate_x_deg = ${n(params.plReferenceRotateXDeg ?? 0)};
+pl_reference_rotate_y_deg = ${n(params.plReferenceRotateYDeg ?? 0)};
+pl_reference_rotate_z_deg = ${n(params.plReferenceRotateZDeg ?? 0)};
 
 pl_reference_flip_x = ${params.plReferenceFlipX ? "true" : "false"};
 pl_reference_flip_y = ${params.plReferenceFlipY ? "true" : "false"};
