@@ -37,20 +37,6 @@ const ROLE_VISUAL_STYLE: Record<AssemblyPreviewColorRole, RoleVisualStyle> = {
   custom: { color: 0xb6c2d6, opacity: 0.9, metalness: 0.12, roughness: 0.62 }
 };
 
-function isRingLikePart(part: AssemblyPreviewPart): boolean {
-  return (
-    part.type === "spacer" ||
-    part.type === "lens_cup" ||
-    part.type === "retaining_ring" ||
-    part.type === "diffusion_disk" ||
-    part.type === "iris_disk" ||
-    part.type === "insert_iris" ||
-    part.type === "insert_filter" ||
-    part.type === "insert_diffusion" ||
-    part.type === "insert_custom"
-  );
-}
-
 function resolveInnerDiameterMm(part: AssemblyPreviewPart): number {
   const aperture = typeof part.apertureDiameterMm === "number" && Number.isFinite(part.apertureDiameterMm)
     ? part.apertureDiameterMm
@@ -95,6 +81,7 @@ export function ThreeAssemblyPreview({
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   const [availability, setAvailability] = useState<ViewerAvailability>("loading");
+  const [sceneReadyVersion, setSceneReadyVersion] = useState(0);
   const availabilityRef = useRef<ViewerAvailability>("loading");
 
   const bounds = useMemo(() => {
@@ -167,6 +154,9 @@ export function ThreeAssemblyPreview({
         const initialWidth = Math.max(260, container.clientWidth);
         const initialHeight = Math.max(300, container.clientHeight);
         renderer.setSize(initialWidth, initialHeight, false);
+        renderer.domElement.style.width = "100%";
+        renderer.domElement.style.height = "100%";
+        renderer.domElement.style.display = "block";
 
         container.innerHTML = "";
         container.appendChild(renderer.domElement);
@@ -199,6 +189,7 @@ export function ThreeAssemblyPreview({
         cameraRef.current = camera;
         controlsRef.current = controls;
         rootGroupRef.current = rootGroup;
+        setSceneReadyVersion((value) => value + 1);
 
         const raycaster = new THREE.Raycaster();
         raycasterRef.current = raycaster;
@@ -240,6 +231,8 @@ export function ThreeAssemblyPreview({
           const width = Math.max(260, Math.floor(entry.contentRect.width));
           const height = Math.max(300, Math.floor(entry.contentRect.height));
           renderer.setSize(width, height, false);
+          renderer.domElement.style.width = "100%";
+          renderer.domElement.style.height = "100%";
           camera.aspect = width / height;
           camera.updateProjectionMatrix();
         });
@@ -333,7 +326,7 @@ export function ThreeAssemblyPreview({
   useEffect(() => {
     const THREE = THREERef.current;
     const rootGroup = rootGroupRef.current;
-    if (!THREE || !rootGroup) return;
+    if (!THREE || !rootGroup || availability !== "ready") return;
 
     while (rootGroup.children.length > 0) {
       const child = rootGroup.children.pop();
@@ -504,7 +497,7 @@ export function ThreeAssemblyPreview({
     rootGroup.add(axisLine);
 
     positionCamera();
-  }, [parts, derived, selectedId, bounds]);
+  }, [parts, derived, selectedId, bounds, sceneReadyVersion, availability]);
 
   useEffect(() => {
     if (availabilityRef.current !== "ready") return;
