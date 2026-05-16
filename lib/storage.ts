@@ -66,6 +66,18 @@ function normalizePhysicalSpacerThicknessSource(value: unknown): PhysicalSpacerT
   return "same_as_airspace";
 }
 
+function normalizeCupInsertionSide(value: unknown): "auto" | "front" | "rear" {
+  if (value === "front" || value === "rear" || value === "auto") return value;
+  return "auto";
+}
+
+function normalizeCupRetainingSide(value: unknown): "auto" | "front" | "rear" | "both" | "none" {
+  if (value === "front" || value === "rear" || value === "both" || value === "none" || value === "auto") {
+    return value;
+  }
+  return "auto";
+}
+
 function buildSteppedSegmentsFromMeasurementFields(fields: {
   hasSteppedProfile?: boolean;
   largeDiameterMm?: number;
@@ -160,9 +172,9 @@ export function normalizeProject(project: LensProject): LensProject {
       ...(project.cadDefaults ?? {})
     },
     stackItems: opticalStackItems
-      .map((item, index) => {
-        const base = { ...item, positionIndex: index };
-        if (base.type === "spacer") {
+      .map((item, index): LensProject["stackItems"][number] => {
+        if (item.type === "spacer") {
+          const base = { ...item, positionIndex: index };
           const mode =
             base.spacerDiameterMode === "match_lens_cups" ||
             base.spacerDiameterMode === "manual"
@@ -218,13 +230,17 @@ export function normalizeProject(project: LensProject): LensProject {
                   : undefined
           };
         }
-        if (base.type === "retaining_ring") {
+        if (item.type === "retaining_ring") {
+          const base = { ...item, positionIndex: index };
           return {
             ...base,
             autoFitToBarrel: base.autoFitToBarrel ?? true
           };
         }
-        if (base.type !== "glass") return base;
+        if (item.type !== "glass") {
+          return { ...item, positionIndex: index };
+        }
+        const base = { ...item, positionIndex: index };
         const linkedAnnotation = base.sourceMeasurementAnnotationId
           ? annotationById.get(base.sourceMeasurementAnnotationId)
           : undefined;
@@ -272,17 +288,8 @@ export function normalizeProject(project: LensProject): LensProject {
           thicknessMeasurementType:
             base.thicknessMeasurementType ?? linkedFields?.thicknessMeasurementType ?? "unknown",
           thicknessConfidence: base.thicknessConfidence ?? linkedFields?.thicknessConfidence ?? "unknown",
-          cupInsertionSide:
-            base.cupInsertionSide === "front" || base.cupInsertionSide === "rear"
-              ? base.cupInsertionSide
-              : "auto",
-          cupRetainingSide:
-            base.cupRetainingSide === "front" ||
-            base.cupRetainingSide === "rear" ||
-            base.cupRetainingSide === "both" ||
-            base.cupRetainingSide === "none"
-              ? base.cupRetainingSide
-              : "auto",
+          cupInsertionSide: normalizeCupInsertionSide(base.cupInsertionSide),
+          cupRetainingSide: normalizeCupRetainingSide(base.cupRetainingSide),
           retainingLipEnabled: base.retainingLipEnabled ?? true,
           retainingLipThicknessMm:
             toPositive(base.retainingLipThicknessMm) > 0 ? base.retainingLipThicknessMm : undefined,
