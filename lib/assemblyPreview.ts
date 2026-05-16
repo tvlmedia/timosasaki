@@ -5,31 +5,50 @@ import type { LensProject, StackItem } from "@/types";
 
 type PreviewStatus = "ok" | "warning" | "error";
 
+export type AssemblyPreviewPartType =
+  | "lens_cup"
+  | "spacer"
+  | "insert_iris"
+  | "insert_filter"
+  | "insert_diffusion"
+  | "insert_custom"
+  | "iris_disk"
+  | "diffusion_disk"
+  | "retaining_ring"
+  | "custom";
+
+export type AssemblyPreviewColorRole =
+  | "cup"
+  | "spacer"
+  | "insert"
+  | "carrier"
+  | "barrel"
+  | "ring"
+  | "custom";
+
 export type AssemblyPreviewPart = {
   id: string;
   label: string;
-  type:
-    | "lens_cup"
-    | "spacer"
-    | "insert_iris"
-    | "insert_filter"
-    | "insert_diffusion"
-    | "insert_custom"
-    | "iris_disk"
-    | "diffusion_disk"
-    | "retaining_ring"
-    | "custom";
+  shortLabel: string;
+  type: AssemblyPreviewPartType;
+  colorRole: AssemblyPreviewColorRole;
   sourceStackItemId?: string;
+  parentAirSpaceId?: string;
+  sourceLabel?: string;
   startZMm: number;
   endZMm: number;
   lengthMm: number;
   outerDiameterMm: number;
   innerDiameterMm?: number;
   apertureDiameterMm?: number;
+  warnings: string[];
   notes?: string;
+  metadata?: Record<string, string | number | boolean | undefined>;
 };
 
-export type AssemblyPreviewStatusLine = {
+export type AssemblyPreviewCheck = {
+  id: string;
+  label: string;
   status: PreviewStatus;
   message: string;
 };
@@ -47,12 +66,15 @@ export type AssemblyPreviewDerived = {
   fixedBarrelLengthMm: number;
   slotLengthMm: number;
   recommendedFocusTravelMm?: number;
+  recommendedSlotLengthMm?: number;
+  targetMountThroatDiameterMm?: number;
 };
 
 export type AssemblyPreviewResult = {
   sequence: AssemblyPreviewPart[];
-  statuses: AssemblyPreviewStatusLine[];
+  checks: AssemblyPreviewCheck[];
   derived: AssemblyPreviewDerived;
+  limitations: string[];
 };
 
 const DEFAULT_MIN_CUP_WALL_THICKNESS_MM = 2.0;
@@ -133,6 +155,19 @@ function getNearbyAperture(items: StackItem[], fromIndex: number): number {
   return Math.max(scan(-1), scan(1));
 }
 
+function extractElementToken(label: string): string | undefined {
+  const match = label.match(/\bE\d+(?:\/E\d+)?\b/i);
+  if (match?.[0]) return match[0].toUpperCase();
+  return undefined;
+}
+
+function toInsertShortLabel(type: "iris" | "filter" | "diffusion" | "custom"): string {
+  if (type === "iris") return "Iris";
+  if (type === "filter") return "Filter";
+  if (type === "diffusion") return "Diff";
+  return "Insert";
+}
+
 function deriveSizing(project: LensProject): AssemblyPreviewDerived {
   const largestGlassDiameterMm = getLargestGlassDiameter(project.stackItems);
   const targetStackOuterDiameterMm = Number(
@@ -196,11 +231,13 @@ function deriveSizing(project: LensProject): AssemblyPreviewDerived {
   );
   const slotLengthMm = Number(
     (
-      recommendedSlotLengthMm > 0
-        ? recommendedSlotLengthMm
-        : recommendedFocusTravelMm > 0
-          ? recommendedFocusTravelMm + 2.0
-          : DEFAULT_SLOT_LENGTH_WITHOUT_FOCUS_TRAVEL_MM
+      toPositive(project.cadDefaults.plSlotLengthManualMm) > 0
+        ? (project.cadDefaults.plSlotLengthManualMm as number)
+        : recommendedSlotLengthMm > 0
+          ? recommendedSlotLengthMm
+          : recommendedFocusTravelMm > 0
+            ? recommendedFocusTravelMm + 2.0
+            : DEFAULT_SLOT_LENGTH_WITHOUT_FOCUS_TRAVEL_MM
     ).toFixed(3)
   );
   const slotStartMm = Math.max(0, project.cadDefaults.plSlotStartFromMainBarrelMm ?? 8.0);
@@ -218,17 +255,44 @@ function deriveSizing(project: LensProject): AssemblyPreviewDerived {
     fixedBarrelOuterDiameterMm,
     fixedBarrelLengthMm,
     slotLengthMm,
-    recommendedFocusTravelMm: recommendedFocusTravelMm > 0 ? recommendedFocusTravelMm : undefined
+    recommendedFocusTravelMm: recommendedFocusTravelMm > 0 ? recommendedFocusTravelMm : undefined,
+    recommendedSlotLengthMm: recommendedSlotLengthMm > 0 ? recommendedSlotLengthMm : undefined,
+    targetMountThroatDiameterMm: toPositive(focusSetup.targetMountThroatDiameterMm) || undefined
   };
 }
 
 export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewResult {
   const derived = deriveSizing(project);
+  const focusSetup = normalizeFocusTravelSetup(project.focusTravel);
   const ordered = [...project.stackItems].sort((a, b) => a.positionIndex - b.positionIndex);
-  const statuses: AssemblyPreviewStatusLine[] = [];
+
   const sequence: AssemblyPreviewPart[] = [];
+  const checks: AssemblyPreviewCheck[] = [];
+  const limitations: string[] = [
+    "Assembly preview is parametric and simplified. It does not render actual OpenSCAD/STL geometry. Use OpenSCAD/Cura/FreeCAD for final geometry inspection."
+  ];
+
+  const seenCheckLines = new Set<string>();
+  const addCheck = (id: string, label: string, status: PreviewStatus, message: string) => {
+    const key = `${id}::${status}::${message}`;
+    if (seenCheckLines.has(key)) return;
+    seenCheckLines.add(key);
+    checks.push({ id, label, status, message });
+  };
 
   let zCursor = 0;
+  let lensCounter = 0;
+  let airspaceCounter = 0;
+  const airspaceIndexById = new Map<string, number>();
+
+  const getAirspaceIndex = (stackItemId: string): number => {
+    const existing = airspaceIndexById.get(stackItemId);
+    if (existing) return existing;
+    airspaceCounter += 1;
+    airspaceIndexById.set(stackItemId, airspaceCounter);
+    return airspaceCounter;
+  };
+
   const appendPart = (part: Omit<AssemblyPreviewPart, "startZMm" | "endZMm">) => {
     const lengthMm = Number(Math.max(0, part.lengthMm).toFixed(3));
     const startZMm = Number(zCursor.toFixed(3));
@@ -244,73 +308,132 @@ export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewRes
 
   ordered.forEach((item, index) => {
     if (item.type === "glass") {
+      lensCounter += 1;
       const cupDepthMm = estimateLensCupDepthMm(item, project.cadDefaults.retainingLipMm);
       const sourceDiameter = toPositive(item.diameterMm);
+      const token = extractElementToken(item.name) ?? `E${lensCounter}`;
       appendPart({
         id: `${item.id}::cup`,
         label: `${item.name} cup`,
+        shortLabel: token,
         type: "lens_cup",
+        colorRole: "cup",
         sourceStackItemId: item.id,
+        sourceLabel: item.name,
         lengthMm: cupDepthMm,
         outerDiameterMm: derived.targetStackOuterDiameterMm,
         innerDiameterMm: sourceDiameter > 0 ? sourceDiameter + Math.max(0, project.cadDefaults.printToleranceMm) : undefined,
-        notes: "Generated from glass item"
+        warnings: [],
+        notes: "Generated lens cup"
       });
       return;
     }
 
     if (item.type === "spacer") {
+      const airIndex = getAirspaceIndex(item.id);
       const desiredMm = getSpacerDesiredOpticalAirGapMm(item);
       const nearbyApertureMm = getNearbyAperture(ordered, index);
       const layouts = calculateAirspaceInsertLayouts(desiredMm, item.insertedItems, {
         targetStackOuterDiameterMm: derived.targetStackOuterDiameterMm,
         nearbyClearApertureMm: nearbyApertureMm
       });
+
       const insertLayouts = layouts.length > 1 ? layouts.slice(0, 1) : layouts;
       if (layouts.length > 1) {
-        statuses.push({
-          status: "warning",
-          message: `${item.name}: multiple inserts in one airspace are not fully previewed yet (showing first insert).`
-        });
+        addCheck(
+          "airspace_insert_multi",
+          "AirSpace insert layout",
+          "warning",
+          `${item.name}: multiple inserts in one airspace are not fully previewed yet (showing first insert).`
+        );
       }
 
       if (insertLayouts.length === 0) {
         appendPart({
           id: item.id,
           label: `${item.name} spacer`,
+          shortLabel: `Air ${airIndex}`,
           type: "spacer",
+          colorRole: "spacer",
           sourceStackItemId: item.id,
+          sourceLabel: item.name,
           lengthMm: getSpacerPrintedThicknessMm(item) || desiredMm,
           outerDiameterMm: derived.targetStackOuterDiameterMm,
           innerDiameterMm: toPositive(item.innerDiameterMm) || undefined,
-          notes: "AirSpace without inserts"
+          warnings: [],
+          notes: "AirSpace spacer"
         });
         return;
       }
 
       insertLayouts.forEach((layout, insertIndex) => {
-        layout.warnings.forEach((warning) => {
-          statuses.push({
-            status:
-              warning.includes("too thick") || warning.includes("does not fit") ? "error" : "warning",
-            message: `${layout.item.label}: ${warning}`
-          });
+        const warningPrefix = `${item.name} / ${layout.item.label}`;
+        if (layout.item.thicknessMm >= layout.desiredOpticalAirGapMm) {
+          addCheck(
+            `airspace_insert_fit_${item.id}_${insertIndex}`,
+            "AirSpace insert fit",
+            "error",
+            `${warningPrefix}: inserted thickness ${layout.item.thicknessMm.toFixed(3)}mm is not smaller than desired airspace ${layout.desiredOpticalAirGapMm.toFixed(3)}mm.`
+          );
+        }
+        if (layout.spacerBeforeMm < 0 || layout.spacerAfterMm < 0) {
+          addCheck(
+            `airspace_insert_negative_${item.id}_${insertIndex}`,
+            "AirSpace insert position",
+            "error",
+            `${warningPrefix}: insert position does not fit inside this airspace.`
+          );
+        }
+        if (layout.spacerBeforeMm >= 0 && layout.spacerBeforeMm < 0.4) {
+          addCheck(
+            `airspace_insert_before_thin_${item.id}_${insertIndex}`,
+            "AirSpace insert spacer thickness",
+            "warning",
+            `${warningPrefix}: spacer before insert is very thin (${layout.spacerBeforeMm.toFixed(3)}mm).`
+          );
+        }
+        if (layout.spacerAfterMm >= 0 && layout.spacerAfterMm < 0.4) {
+          addCheck(
+            `airspace_insert_after_thin_${item.id}_${insertIndex}`,
+            "AirSpace insert spacer thickness",
+            "warning",
+            `${warningPrefix}: spacer after insert is very thin (${layout.spacerAfterMm.toFixed(3)}mm).`
+          );
+        }
+
+        layout.warnings.forEach((warning, warningIndex) => {
+          const lower = warning.toLowerCase();
+          const severity: PreviewStatus =
+            lower.includes("too thick") || lower.includes("does not fit") || lower.includes("must sum")
+              ? "error"
+              : "warning";
+          addCheck(
+            `airspace_insert_layout_${item.id}_${insertIndex}_${warningIndex}`,
+            "AirSpace insert layout",
+            severity,
+            `${warningPrefix}: ${warning}`
+          );
         });
 
         if (layout.spacerBeforeMm > 0) {
           appendPart({
             id: `${item.id}::insert-${insertIndex + 1}::before`,
             label: `${item.name} spacer before`,
+            shortLabel: `Air ${airIndex}a`,
             type: "spacer",
+            colorRole: "spacer",
             sourceStackItemId: item.id,
+            parentAirSpaceId: item.id,
+            sourceLabel: item.name,
             lengthMm: layout.spacerBeforeMm,
             outerDiameterMm: derived.targetStackOuterDiameterMm,
             innerDiameterMm: toPositive(item.innerDiameterMm) || undefined,
+            warnings: layout.spacerBeforeMm < 0.4 ? ["Very thin spacer section"] : [],
             notes: `Before ${layout.item.type} insert`
           });
         }
 
-        const insertType: AssemblyPreviewPart["type"] =
+        const insertType: AssemblyPreviewPartType =
           layout.item.type === "iris"
             ? "insert_iris"
             : layout.item.type === "filter"
@@ -318,11 +441,16 @@ export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewRes
               : layout.item.type === "diffusion"
                 ? "insert_diffusion"
                 : "insert_custom";
+
         appendPart({
           id: `${item.id}::insert-${insertIndex + 1}::disk`,
           label: layout.item.label,
+          shortLabel: toInsertShortLabel(layout.item.type),
           type: insertType,
+          colorRole: "insert",
           sourceStackItemId: item.id,
+          parentAirSpaceId: item.id,
+          sourceLabel: item.name,
           lengthMm: toPositive(layout.item.thicknessMm),
           outerDiameterMm: toPositive(layout.item.diskDiameterMm) || derived.targetStackOuterDiameterMm,
           innerDiameterMm:
@@ -331,18 +459,30 @@ export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewRes
             layout.item.type === "iris" || layout.item.type === "filter" || layout.item.type === "custom"
               ? toPositive(layout.item.apertureDiameterMm) || undefined
               : undefined,
-          notes: `Inside ${item.name}`
+          warnings: [...layout.warnings],
+          notes: `Inside ${item.name}`,
+          metadata: {
+            positionMode: layout.item.positionMode,
+            spacerBeforeMm: layout.spacerBeforeMm,
+            spacerAfterMm: layout.spacerAfterMm,
+            desiredOpticalAirGapMm: layout.desiredOpticalAirGapMm
+          }
         });
 
         if (layout.spacerAfterMm > 0) {
           appendPart({
             id: `${item.id}::insert-${insertIndex + 1}::after`,
             label: `${item.name} spacer after`,
+            shortLabel: `Air ${airIndex}b`,
             type: "spacer",
+            colorRole: "spacer",
             sourceStackItemId: item.id,
+            parentAirSpaceId: item.id,
+            sourceLabel: item.name,
             lengthMm: layout.spacerAfterMm,
             outerDiameterMm: derived.targetStackOuterDiameterMm,
             innerDiameterMm: toPositive(item.innerDiameterMm) || undefined,
+            warnings: layout.spacerAfterMm < 0.4 ? ["Very thin spacer section"] : [],
             notes: `After ${layout.item.type} insert`
           });
         }
@@ -354,11 +494,15 @@ export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewRes
       appendPart({
         id: item.id,
         label: item.name,
+        shortLabel: "Iris",
         type: "iris_disk",
+        colorRole: "insert",
         sourceStackItemId: item.id,
+        sourceLabel: item.name,
         lengthMm: toPositive(item.thicknessMm),
         outerDiameterMm: toPositive(item.diskDiameterMm) || derived.targetStackOuterDiameterMm,
         apertureDiameterMm: toPositive(item.apertureDiameterMm) || undefined,
+        warnings: [],
         notes: "Standalone iris"
       });
       return;
@@ -368,11 +512,15 @@ export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewRes
       appendPart({
         id: item.id,
         label: item.name,
+        shortLabel: "Diff",
         type: "diffusion_disk",
+        colorRole: "insert",
         sourceStackItemId: item.id,
+        sourceLabel: item.name,
         lengthMm: toPositive(item.thicknessMm),
         outerDiameterMm: toPositive(item.diskDiameterMm) || derived.targetStackOuterDiameterMm,
         innerDiameterMm: toPositive(item.clearCenterDiameterMm) || undefined,
+        warnings: [],
         notes: "Standalone diffusion"
       });
       return;
@@ -382,11 +530,15 @@ export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewRes
       appendPart({
         id: item.id,
         label: item.name,
+        shortLabel: "Ring",
         type: "retaining_ring",
+        colorRole: "ring",
         sourceStackItemId: item.id,
+        sourceLabel: item.name,
         lengthMm: toPositive(item.thicknessMm),
         outerDiameterMm: toPositive(item.outerDiameterMm) || derived.targetStackOuterDiameterMm,
         innerDiameterMm: toPositive(item.innerDiameterMm) || undefined,
+        warnings: [],
         notes: "Standalone retaining ring"
       });
       return;
@@ -398,71 +550,200 @@ export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewRes
         appendPart({
           id: item.id,
           label: item.name,
+          shortLabel: "Custom",
           type: "custom",
+          colorRole: "custom",
           sourceStackItemId: item.id,
+          sourceLabel: item.name,
           lengthMm,
           outerDiameterMm: toPositive(item.diameterMm) || derived.targetStackOuterDiameterMm,
+          warnings: [],
           notes: "Standalone custom item"
         });
       }
     }
   });
 
-  const dedupStatus = (status: PreviewStatus, message: string) => {
-    if (statuses.some((line) => line.status === status && line.message === message)) return;
-    statuses.push({ status, message });
-  };
-
-  const cups = sequence.filter((part) => part.type === "lens_cup");
-  const spacers = sequence.filter((part) => part.type === "spacer");
-  if (cups.some((part) => Math.abs(part.outerDiameterMm - derived.targetStackOuterDiameterMm) > 0.01)) {
-    dedupStatus("warning", "One or more lens cup ODs do not match target stack OD.");
-  } else if (cups.length > 0) {
-    dedupStatus("ok", "Lens cup OD matches target stack OD.");
-  }
-  if (spacers.some((part) => Math.abs(part.outerDiameterMm - derived.targetStackOuterDiameterMm) > 0.01)) {
-    dedupStatus("warning", "One or more spacer ODs do not match target stack OD.");
-  } else if (spacers.length > 0) {
-    dedupStatus("ok", "Spacer OD matches target stack OD.");
-  }
-
-  if (derived.carrierInnerDiameterMm <= derived.targetStackOuterDiameterMm) {
-    dedupStatus("error", "Carrier inner diameter is not larger than stack OD.");
-  } else {
-    dedupStatus("ok", "Carrier inner diameter clears stack OD.");
-  }
-
-  if (derived.fixedBarrelInnerDiameterMm <= derived.carrierOuterDiameterMm) {
-    dedupStatus("error", "Fixed barrel inner diameter is not larger than carrier outer diameter.");
-  } else {
-    dedupStatus("ok", "Fixed barrel inner diameter clears carrier outer diameter.");
-  }
-
   const lastSequencePart = sequence.length ? sequence[sequence.length - 1] : undefined;
   const mechanicalStackLengthMm = Number((lastSequencePart?.endZMm ?? 0).toFixed(3));
-  if (derived.carrierLengthMm < mechanicalStackLengthMm) {
-    dedupStatus("warning", "Carrier length is shorter than assembled mechanical stack length.");
+
+  const cupAndSpacerParts = sequence.filter((part) => part.type === "lens_cup" || part.type === "spacer");
+  const odMismatchToleranceMm = 0.05;
+  const mismatchParts = cupAndSpacerParts.filter(
+    (part) => Math.abs(part.outerDiameterMm - derived.targetStackOuterDiameterMm) > odMismatchToleranceMm
+  );
+  if (cupAndSpacerParts.length === 0) {
+    addCheck(
+      "cup_spacer_od_match",
+      "Lens cup / spacer OD match",
+      "warning",
+      "No generated cups/spacers found to verify OD matching."
+    );
+  } else if (mismatchParts.length === 0) {
+    addCheck(
+      "cup_spacer_od_match",
+      "Lens cup / spacer OD match",
+      "ok",
+      `Cups/spacers share OD: ${derived.targetStackOuterDiameterMm.toFixed(3)}mm`
+    );
   } else {
-    dedupStatus("ok", "Carrier length covers the assembled mechanical stack.");
+    const names = mismatchParts.slice(0, 3).map((part) => part.shortLabel).join(", ");
+    addCheck(
+      "cup_spacer_od_match",
+      "Lens cup / spacer OD match",
+      "warning",
+      `OD mismatch against target ${derived.targetStackOuterDiameterMm.toFixed(3)}mm (${names}${mismatchParts.length > 3 ? ", ..." : ""}).`
+    );
   }
 
-  if (
-    toPositive(derived.recommendedFocusTravelMm) > 0 &&
-    toPositive(derived.slotLengthMm) > 0 &&
-    derived.slotLengthMm < (derived.recommendedFocusTravelMm as number)
-  ) {
-    dedupStatus("warning", "Fixed barrel slot length is shorter than recommended focus travel.");
+  const stackToCarrierClearanceMm = Number(
+    (derived.carrierInnerDiameterMm - derived.targetStackOuterDiameterMm).toFixed(3)
+  );
+  if (stackToCarrierClearanceMm <= 0) {
+    addCheck(
+      "stack_fits_carrier",
+      "Stack fits in carrier",
+      "error",
+      `Carrier ID is not larger than stack OD (${stackToCarrierClearanceMm.toFixed(3)}mm clearance).`
+    );
+  } else {
+    addCheck(
+      "stack_fits_carrier",
+      "Stack fits in carrier",
+      "ok",
+      `Stack fits carrier: ${stackToCarrierClearanceMm.toFixed(3)}mm radial clearance basis.`
+    );
   }
+
+  const carrierToBarrelClearanceMm = Number(
+    (derived.fixedBarrelInnerDiameterMm - derived.carrierOuterDiameterMm).toFixed(3)
+  );
+  if (carrierToBarrelClearanceMm <= 0) {
+    addCheck(
+      "carrier_fits_barrel",
+      "Carrier fits in fixed barrel",
+      "error",
+      `Fixed barrel ID is not larger than carrier OD (${carrierToBarrelClearanceMm.toFixed(3)}mm clearance).`
+    );
+  } else {
+    addCheck(
+      "carrier_fits_barrel",
+      "Carrier fits in fixed barrel",
+      "ok",
+      `Carrier fits fixed barrel: ${carrierToBarrelClearanceMm.toFixed(3)}mm radial clearance basis.`
+    );
+  }
+
+  if (derived.carrierLengthMm < mechanicalStackLengthMm) {
+    addCheck(
+      "carrier_length_vs_stack",
+      "Carrier length vs stack length",
+      "warning",
+      `Carrier is shorter than assembled mechanical stack (${derived.carrierLengthMm.toFixed(3)}mm < ${mechanicalStackLengthMm.toFixed(3)}mm).`
+    );
+  } else {
+    addCheck(
+      "carrier_length_vs_stack",
+      "Carrier length vs stack length",
+      "ok",
+      `Carrier length covers stack (${derived.carrierLengthMm.toFixed(3)}mm >= ${mechanicalStackLengthMm.toFixed(3)}mm).`
+    );
+  }
+
+  const slotTargetMm = toPositive(derived.recommendedSlotLengthMm) || toPositive(derived.recommendedFocusTravelMm);
+  if (slotTargetMm > 0) {
+    if (derived.slotLengthMm < slotTargetMm) {
+      addCheck(
+        "slot_length_vs_focus",
+        "Fixed barrel slot length vs focus travel",
+        "warning",
+        `Slot length ${derived.slotLengthMm.toFixed(3)}mm is shorter than recommendation ${slotTargetMm.toFixed(3)}mm.`
+      );
+    } else {
+      addCheck(
+        "slot_length_vs_focus",
+        "Fixed barrel slot length vs focus travel",
+        "ok",
+        `Slot length ${derived.slotLengthMm.toFixed(3)}mm meets recommendation ${slotTargetMm.toFixed(3)}mm.`
+      );
+    }
+  } else {
+    addCheck(
+      "slot_length_vs_focus",
+      "Fixed barrel slot length vs focus travel",
+      "warning",
+      "Focus travel recommendation unavailable; verify slot length manually."
+    );
+  }
+
+  const ringLikeParts = sequence.filter(
+    (part) =>
+      part.type === "spacer" ||
+      part.type === "retaining_ring" ||
+      part.type === "diffusion_disk" ||
+      part.type === "iris_disk" ||
+      part.type === "insert_iris" ||
+      part.type === "insert_filter" ||
+      part.type === "insert_diffusion" ||
+      part.type === "insert_custom"
+  );
+  ringLikeParts.forEach((part, index) => {
+    const apertureOrInner = toPositive(part.innerDiameterMm) || toPositive(part.apertureDiameterMm);
+    if (apertureOrInner <= 0) return;
+
+    if (part.outerDiameterMm <= apertureOrInner) {
+      addCheck(
+        `ring_geometry_${index}`,
+        "Ring geometry",
+        "error",
+        `${part.label}: OD ${part.outerDiameterMm.toFixed(3)}mm must be larger than ID/aperture ${apertureOrInner.toFixed(3)}mm.`
+      );
+      return;
+    }
+
+    const wallMm = (part.outerDiameterMm - apertureOrInner) / 2;
+    if (wallMm <= 0) {
+      addCheck(
+        `ring_geometry_${index}`,
+        "Ring geometry",
+        "error",
+        `${part.label}: non-positive wall thickness.`
+      );
+    } else if (wallMm < 0.8) {
+      addCheck(
+        `ring_geometry_${index}`,
+        "Ring geometry",
+        "warning",
+        `${part.label}: thin ring wall ${wallMm.toFixed(3)}mm.`
+      );
+    }
+  });
 
   const glassItems = ordered.filter(
     (item): item is Extract<StackItem, { type: "glass" }> => item.type === "glass"
   );
-  glassItems.forEach((glass) => {
+  glassItems.forEach((glass, index) => {
     const clearApertureMm = toPositive(glass.clearApertureMm);
     const lipEnabled = glass.retainingLipEnabled ?? true;
     const lipInnerMm = toPositive(glass.retainingLipInnerDiameterMm);
+    const boreEstimateMm = toPositive(glass.diameterMm) + Math.max(0, project.cadDefaults.printToleranceMm);
+
     if (lipEnabled && clearApertureMm > 0 && lipInnerMm > 0 && lipInnerMm <= clearApertureMm) {
-      dedupStatus("warning", `${glass.name}: retaining lip inner diameter may vignette.`);
+      addCheck(
+        `retaining_lip_vignette_${index}`,
+        "Retaining lip / cup insertion",
+        "warning",
+        `${glass.name}: retaining lip inner diameter may vignette the clear aperture.`
+      );
+    }
+
+    if (lipEnabled && lipInnerMm > 0 && boreEstimateMm > 0 && lipInnerMm >= boreEstimateMm - 0.01) {
+      addCheck(
+        `retaining_lip_geometry_${index}`,
+        "Retaining lip / cup insertion",
+        "warning",
+        `${glass.name}: retaining lip inner diameter is near/above bore diameter, lip retention may be ineffective.`
+      );
     }
 
     if (glass.advancedProfile?.enabled) {
@@ -470,34 +751,127 @@ export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewRes
         .slice()
         .sort((a, b) => a.index - b.index)
         .filter((section) => toPositive(section.diameterMm) > 0 && toPositive(section.lengthMm) > 0);
-      if (sections.length > 1 && toPositive(glass.advancedProfile.maxDiameterMm) > 0) {
+
+      if (!sections.length) {
+        addCheck(
+          `advanced_profile_sections_${index}`,
+          "Retaining lip / cup insertion",
+          "warning",
+          `${glass.name}: advanced profile enabled but no valid sections.`
+        );
+      }
+
+      const totalFromSections = sections.reduce((sum, section) => sum + toPositive(section.lengthMm), 0);
+      const totalLength = toPositive(glass.advancedProfile.totalLengthMm);
+      if (totalLength > 0 && totalFromSections > 0) {
+        const diff = Math.abs(totalLength - totalFromSections);
+        if (diff > 2.0) {
+          addCheck(
+            `advanced_profile_length_${index}`,
+            "Retaining lip / cup insertion",
+            "warning",
+            `${glass.name}: advanced profile section sum differs from total by ${diff.toFixed(3)}mm.`
+          );
+        } else if (diff > 1.0) {
+          addCheck(
+            `advanced_profile_length_${index}`,
+            "Retaining lip / cup insertion",
+            "warning",
+            `${glass.name}: advanced profile section sum differs from total by ${diff.toFixed(3)}mm.`
+          );
+        }
+      }
+
+      const maxSectionDiameterMm = sections.reduce(
+        (max, section) => Math.max(max, toPositive(section.diameterMm)),
+        0
+      );
+      const maxDiameterMm = toPositive(glass.advancedProfile.maxDiameterMm);
+      if (maxDiameterMm > 0 && maxSectionDiameterMm > maxDiameterMm + 0.001) {
+        addCheck(
+          `advanced_profile_max_${index}`,
+          "Retaining lip / cup insertion",
+          "warning",
+          `${glass.name}: advanced profile max diameter is smaller than a section diameter.`
+        );
+      }
+
+      if (sections.length > 1 && maxDiameterMm > 0) {
         const insertionSide = glass.cupInsertionSide === "rear" ? "rear" : "front";
         const traversal = insertionSide === "rear" ? sections.slice().reverse() : sections;
         let maxIndex = 0;
         let minDelta = Number.POSITIVE_INFINITY;
-        traversal.forEach((section, index) => {
-          const delta = Math.abs(section.diameterMm - (glass.advancedProfile?.maxDiameterMm as number));
+        traversal.forEach((section, sectionIndex) => {
+          const delta = Math.abs(section.diameterMm - maxDiameterMm);
           if (delta < minDelta) {
             minDelta = delta;
-            maxIndex = index;
+            maxIndex = sectionIndex;
           }
         });
         const hasPreMaxSmaller = traversal.some(
-          (section, index) => index < maxIndex && section.diameterMm < (glass.advancedProfile?.maxDiameterMm as number) - 0.001
+          (section, sectionIndex) => sectionIndex < maxIndex && section.diameterMm < maxDiameterMm - 0.001
         );
         if (hasPreMaxSmaller) {
-          dedupStatus("warning", `${glass.name}: cup insertion side may require insertion-safe bore enlargement.`);
+          addCheck(
+            `cup_insertion_${index}`,
+            "Retaining lip / cup insertion",
+            "warning",
+            `${glass.name}: selected insertion side may require insertion-safe bore enlargement.`
+          );
         }
       }
     }
   });
 
+  if (focusSetup.targetMount === "PL" && !toPositive(derived.targetMountThroatDiameterMm)) {
+    addCheck(
+      "pl_throat",
+      "PL throat clearance",
+      "warning",
+      "PL throat not measured. Measure actual mount throat before finalizing rear carrier clearance."
+    );
+  } else if (toPositive(derived.targetMountThroatDiameterMm) > 0) {
+    const throatClearanceMm = Number(
+      ((derived.targetMountThroatDiameterMm as number) - derived.carrierOuterDiameterMm).toFixed(3)
+    );
+    if (throatClearanceMm < 0) {
+      addCheck(
+        "pl_throat",
+        "PL throat clearance",
+        "error",
+        `Carrier OD exceeds target mount throat (${throatClearanceMm.toFixed(3)}mm clearance).`
+      );
+    } else if (throatClearanceMm < 1.0) {
+      addCheck(
+        "pl_throat",
+        "PL throat clearance",
+        "warning",
+        `Rear carrier to mount throat clearance is very tight (${throatClearanceMm.toFixed(3)}mm).`
+      );
+    } else if (throatClearanceMm < 2.0) {
+      addCheck(
+        "pl_throat",
+        "PL throat clearance",
+        "warning",
+        `Rear carrier to mount throat clearance is small (${throatClearanceMm.toFixed(3)}mm).`
+      );
+    } else {
+      addCheck(
+        "pl_throat",
+        "PL throat clearance",
+        "ok",
+        `Rear carrier clears PL throat by ${throatClearanceMm.toFixed(3)}mm.`
+      );
+    }
+  }
+
   return {
     sequence,
-    statuses,
+    checks,
     derived: {
       ...derived,
       mechanicalStackLengthMm
-    }
+    },
+    limitations
   };
 }

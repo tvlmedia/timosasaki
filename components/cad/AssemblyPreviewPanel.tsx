@@ -2,25 +2,95 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/common/Button";
-import { getAssemblyPreviewData, type AssemblyPreviewPart } from "@/lib/assemblyPreview";
+import {
+  getAssemblyPreviewData,
+  type AssemblyPreviewCheck,
+  type AssemblyPreviewColorRole,
+  type AssemblyPreviewPart
+} from "@/lib/assemblyPreview";
 import type { LensProject } from "@/types";
 
-type AssemblyViewMode = "assembled" | "exploded";
+type AssemblyMode = "assembled" | "exploded";
+type PreviewViewMode = "side_2d" | "view_25d";
 
-const PART_STYLE: Record<
-  AssemblyPreviewPart["type"],
-  { fill: string; stroke: string; text: string }
-> = {
-  lens_cup: { fill: "rgba(222, 187, 66, 0.28)", stroke: "#d5b44b", text: "#f5dd8a" },
-  spacer: { fill: "rgba(188, 196, 205, 0.2)", stroke: "#b5bec8", text: "#d7dbe0" },
-  insert_iris: { fill: "rgba(255, 164, 45, 0.34)", stroke: "#ffac4a", text: "#ffd39c" },
-  insert_filter: { fill: "rgba(255, 194, 97, 0.3)", stroke: "#ffce80", text: "#ffe0ab" },
-  insert_diffusion: { fill: "rgba(191, 108, 255, 0.28)", stroke: "#c791ff", text: "#e4c9ff" },
-  insert_custom: { fill: "rgba(152, 166, 186, 0.26)", stroke: "#aebad0", text: "#d2dae7" },
-  iris_disk: { fill: "rgba(255, 164, 45, 0.34)", stroke: "#ffac4a", text: "#ffd39c" },
-  diffusion_disk: { fill: "rgba(191, 108, 255, 0.28)", stroke: "#c791ff", text: "#e4c9ff" },
-  retaining_ring: { fill: "rgba(138, 146, 155, 0.24)", stroke: "#9ea8b1", text: "#c4cacf" },
-  custom: { fill: "rgba(132, 140, 150, 0.24)", stroke: "#99a4af", text: "#cdd4db" }
+type DisplayPart = AssemblyPreviewPart & {
+  displayStartMm: number;
+  displayEndMm: number;
+  displayIndex: number;
+};
+
+type RoleStyle = {
+  fill: string;
+  stroke: string;
+  text: string;
+  top: string;
+  side: string;
+};
+
+const ROLE_STYLE: Record<AssemblyPreviewColorRole, RoleStyle> = {
+  cup: {
+    fill: "rgba(245, 194, 66, 0.36)",
+    stroke: "#f4c556",
+    text: "#ffe6a3",
+    top: "rgba(255, 213, 106, 0.48)",
+    side: "rgba(198, 152, 47, 0.46)"
+  },
+  spacer: {
+    fill: "rgba(220, 227, 235, 0.26)",
+    stroke: "#d4dbe2",
+    text: "#eaf0f5",
+    top: "rgba(236, 242, 247, 0.36)",
+    side: "rgba(168, 178, 188, 0.4)"
+  },
+  insert: {
+    fill: "rgba(255, 154, 66, 0.38)",
+    stroke: "#ff9f58",
+    text: "#ffd5b1",
+    top: "rgba(255, 180, 114, 0.5)",
+    side: "rgba(214, 115, 41, 0.46)"
+  },
+  carrier: {
+    fill: "rgba(72, 186, 120, 0.14)",
+    stroke: "#6dd09a",
+    text: "#96e6bc",
+    top: "rgba(91, 201, 136, 0.22)",
+    side: "rgba(45, 131, 84, 0.24)"
+  },
+  barrel: {
+    fill: "rgba(84, 176, 212, 0.13)",
+    stroke: "#63b8d8",
+    text: "#9edbf0",
+    top: "rgba(106, 192, 224, 0.2)",
+    side: "rgba(55, 124, 149, 0.24)"
+  },
+  ring: {
+    fill: "rgba(182, 192, 201, 0.24)",
+    stroke: "#b8c4cf",
+    text: "#d8e0e7",
+    top: "rgba(204, 214, 223, 0.33)",
+    side: "rgba(138, 149, 160, 0.36)"
+  },
+  custom: {
+    fill: "rgba(156, 169, 187, 0.22)",
+    stroke: "#b7c2d4",
+    text: "#d8e0ed",
+    top: "rgba(183, 194, 214, 0.3)",
+    side: "rgba(124, 137, 156, 0.34)"
+  }
+};
+
+const LEGEND_ITEMS: Array<{ label: string; role: AssemblyPreviewColorRole }> = [
+  { label: "Cup", role: "cup" },
+  { label: "Spacer", role: "spacer" },
+  { label: "Insert / Iris", role: "insert" },
+  { label: "Carrier", role: "carrier" },
+  { label: "Fixed Barrel", role: "barrel" }
+];
+
+const CHECK_STATUS_ORDER: Record<AssemblyPreviewCheck["status"], number> = {
+  error: 0,
+  warning: 1,
+  ok: 2
 };
 
 function prettyMm(value: number | undefined): string {
@@ -28,27 +98,72 @@ function prettyMm(value: number | undefined): string {
   return value.toFixed(3);
 }
 
-function shortLabel(value: string, maxLength = 24): string {
-  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+function checkStatusIcon(status: AssemblyPreviewCheck["status"]): string {
+  if (status === "error") return "✖";
+  if (status === "warning") return "⚠";
+  return "✓";
+}
+
+function checkStatusClass(status: AssemblyPreviewCheck["status"]): string {
+  if (status === "error") return "text-labDanger";
+  if (status === "warning") return "text-labWarning";
+  return "text-[#80db9f]";
+}
+
+function partTooltipText(part: DisplayPart): string {
+  return [
+    part.label,
+    `Type: ${part.type}`,
+    `Length: ${part.lengthMm.toFixed(3)} mm`,
+    `OD: ${part.outerDiameterMm.toFixed(3)} mm`,
+    part.innerDiameterMm ? `ID: ${part.innerDiameterMm.toFixed(3)} mm` : undefined,
+    part.apertureDiameterMm ? `Aperture: ${part.apertureDiameterMm.toFixed(3)} mm` : undefined,
+    `Start Z: ${part.startZMm.toFixed(3)} mm`,
+    `End Z: ${part.endZMm.toFixed(3)} mm`,
+    part.notes ? `Notes: ${part.notes}` : undefined
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function overlayTooltipText(label: string, lengthMm: number, outerMm: number, innerMm: number): string {
+  return [
+    label,
+    `Length: ${lengthMm.toFixed(3)} mm`,
+    `OD: ${outerMm.toFixed(3)} mm`,
+    `ID: ${innerMm.toFixed(3)} mm`
+  ].join("\n");
 }
 
 export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
-  const [viewMode, setViewMode] = useState<AssemblyViewMode>("assembled");
+  const [assemblyMode, setAssemblyMode] = useState<AssemblyMode>("assembled");
+  const [viewMode, setViewMode] = useState<PreviewViewMode>("side_2d");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const preview = useMemo(() => getAssemblyPreviewData(project), [project]);
+
   const explodedGapMm = 6.0;
-  const sequenceWithDisplay = useMemo(() => {
+  const sequenceWithDisplay = useMemo<DisplayPart[]>(() => {
     return preview.sequence.map((part, index) => {
-      const explodedOffset = viewMode === "exploded" ? index * explodedGapMm : 0;
+      const explodedOffset = assemblyMode === "exploded" ? index * explodedGapMm : 0;
       const displayStartMm = Number((part.startZMm + explodedOffset).toFixed(3));
       const displayEndMm = Number((displayStartMm + part.lengthMm).toFixed(3));
       return {
         ...part,
         displayStartMm,
-        displayEndMm
+        displayEndMm,
+        displayIndex: index
       };
     });
-  }, [preview.sequence, viewMode]);
+  }, [preview.sequence, assemblyMode]);
+
+  const checksSorted = useMemo(() => {
+    return [...preview.checks].sort((a, b) => {
+      const statusDelta = CHECK_STATUS_ORDER[a.status] - CHECK_STATUS_ORDER[b.status];
+      if (statusDelta !== 0) return statusDelta;
+      return a.label.localeCompare(b.label);
+    });
+  }, [preview.checks]);
 
   const maxOuterDiameterMm = useMemo(() => {
     const partMax = sequenceWithDisplay.reduce((max, part) => Math.max(max, part.outerDiameterMm), 0);
@@ -67,32 +182,420 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
     : 0;
   const displayStackLengthMm = Number(Math.max(0, displayStackEndMm - displayStackStartMm).toFixed(3));
 
-  const pxPerMmX = 8;
-  const marginLeftPx = 70;
-  const marginRightPx = 100;
-  const canvasHeightPx = 430;
-  const centerYPx = 220;
-  const maxOuterHeightPx = 230;
-  const diameterScale = maxOuterHeightPx / maxOuterDiameterMm;
+  const marginLeftPx = 78;
+  const marginRightPx = 120;
+  const canvasHeightPx = 470;
+  const centerYPx = 236;
+  const maxOuterHeightPx = 250;
+  const baseViewportWidthPx = 1040;
+
+  const pxPerMmX =
+    displayStackLengthMm > 0
+      ? Math.max(3.5, Math.min(14, (baseViewportWidthPx - marginLeftPx - marginRightPx) / Math.max(displayStackLengthMm, 40)))
+      : 8;
   const canvasWidthPx = Math.max(
-    980,
+    baseViewportWidthPx,
     Math.round(displayStackLengthMm * pxPerMmX + marginLeftPx + marginRightPx)
   );
+  const diameterScale = maxOuterHeightPx / maxOuterDiameterMm;
   const mmToX = (valueMm: number) => marginLeftPx + (valueMm - displayStackStartMm) * pxPerMmX;
 
   const carrierVisualLengthMm = Math.max(preview.derived.carrierLengthMm, displayStackLengthMm);
   const barrelVisualLengthMm = Math.max(preview.derived.fixedBarrelLengthMm, displayStackLengthMm);
 
-  const statuses = preview.statuses;
-  const statusColor = (status: "ok" | "warning" | "error"): string => {
-    if (status === "error") return "text-labDanger";
-    if (status === "warning") return "text-labWarning";
-    return "text-[#7fd89b]";
+  const selectedPart = useMemo(() => {
+    return sequenceWithDisplay.find((part) => part.id === selectedId);
+  }, [sequenceWithDisplay, selectedId]);
+
+  const selectedInfo = useMemo(() => {
+    if (selectedPart) {
+      return {
+        title: selectedPart.label,
+        body: `Type ${selectedPart.type} · Z ${selectedPart.startZMm.toFixed(3)} → ${selectedPart.endZMm.toFixed(3)} mm · L ${selectedPart.lengthMm.toFixed(3)} mm · OD ${selectedPart.outerDiameterMm.toFixed(3)} mm`
+      };
+    }
+    if (selectedId === "__carrier") {
+      return {
+        title: "Sliding optical carrier",
+        body: `L ${preview.derived.carrierLengthMm.toFixed(3)} mm · ID ${preview.derived.carrierInnerDiameterMm.toFixed(3)} mm · OD ${preview.derived.carrierOuterDiameterMm.toFixed(3)} mm`
+      };
+    }
+    if (selectedId === "__fixed_barrel") {
+      return {
+        title: "Fixed PL barrel",
+        body: `L ${preview.derived.fixedBarrelLengthMm.toFixed(3)} mm · ID ${preview.derived.fixedBarrelInnerDiameterMm.toFixed(3)} mm · OD ${preview.derived.fixedBarrelOuterDiameterMm.toFixed(3)} mm`
+      };
+    }
+    return null;
+  }, [selectedPart, selectedId, preview.derived]);
+
+  const renderSide2D = () => {
+    const barrelStyle = ROLE_STYLE.barrel;
+    const carrierStyle = ROLE_STYLE.carrier;
+
+    const barrelHeightPx = Math.max(14, preview.derived.fixedBarrelOuterDiameterMm * diameterScale);
+    const barrelInnerHeightPx = Math.max(
+      6,
+      Math.min(barrelHeightPx - 4, preview.derived.fixedBarrelInnerDiameterMm * diameterScale)
+    );
+    const barrelX = mmToX(displayStackStartMm);
+    const barrelWidthPx = barrelVisualLengthMm * pxPerMmX;
+
+    const carrierHeightPx = Math.max(12, preview.derived.carrierOuterDiameterMm * diameterScale);
+    const carrierInnerHeightPx = Math.max(
+      6,
+      Math.min(carrierHeightPx - 4, preview.derived.carrierInnerDiameterMm * diameterScale)
+    );
+    const carrierX = mmToX(displayStackStartMm);
+    const carrierWidthPx = carrierVisualLengthMm * pxPerMmX;
+
+    return (
+      <svg width={canvasWidthPx} height={canvasHeightPx} className="block">
+        <line
+          x1={marginLeftPx - 36}
+          y1={centerYPx}
+          x2={canvasWidthPx - marginRightPx + 38}
+          y2={centerYPx}
+          stroke="#4d84c3"
+          strokeWidth={1.05}
+          strokeDasharray="3 5"
+        />
+
+        <text x={marginLeftPx - 20} y={24} fill="#8ea0b8" fontSize={11} textAnchor="start">
+          FRONT
+        </text>
+        <text x={canvasWidthPx - marginRightPx + 12} y={24} fill="#8ea0b8" fontSize={11} textAnchor="end">
+          SENSOR
+        </text>
+
+        <g
+          role="button"
+          onClick={() => setSelectedId("__fixed_barrel")}
+          style={{ cursor: "pointer" }}
+          opacity={selectedId === "__fixed_barrel" ? 1 : 0.9}
+        >
+          <title>
+            {overlayTooltipText(
+              "Fixed PL barrel",
+              preview.derived.fixedBarrelLengthMm,
+              preview.derived.fixedBarrelOuterDiameterMm,
+              preview.derived.fixedBarrelInnerDiameterMm
+            )}
+          </title>
+          <rect
+            x={barrelX}
+            y={centerYPx - barrelHeightPx / 2}
+            width={barrelWidthPx}
+            height={barrelHeightPx}
+            fill={barrelStyle.fill}
+            stroke={selectedId === "__fixed_barrel" ? "#d8efff" : barrelStyle.stroke}
+            strokeWidth={selectedId === "__fixed_barrel" ? 1.8 : 1.2}
+            rx={10}
+          />
+          <rect
+            x={barrelX + 1}
+            y={centerYPx - barrelInnerHeightPx / 2}
+            width={Math.max(1, barrelWidthPx - 2)}
+            height={barrelInnerHeightPx}
+            fill="#050505"
+            stroke="rgba(150, 177, 199, 0.35)"
+            strokeWidth={0.65}
+            rx={4}
+          />
+        </g>
+
+        <g
+          role="button"
+          onClick={() => setSelectedId("__carrier")}
+          style={{ cursor: "pointer" }}
+          opacity={selectedId === "__carrier" ? 1 : 0.95}
+        >
+          <title>
+            {overlayTooltipText(
+              "Sliding optical carrier",
+              preview.derived.carrierLengthMm,
+              preview.derived.carrierOuterDiameterMm,
+              preview.derived.carrierInnerDiameterMm
+            )}
+          </title>
+          <rect
+            x={carrierX}
+            y={centerYPx - carrierHeightPx / 2}
+            width={carrierWidthPx}
+            height={carrierHeightPx}
+            fill={carrierStyle.fill}
+            stroke={selectedId === "__carrier" ? "#d8ffeb" : carrierStyle.stroke}
+            strokeWidth={selectedId === "__carrier" ? 1.8 : 1.2}
+            rx={8}
+          />
+          <rect
+            x={carrierX + 1}
+            y={centerYPx - carrierInnerHeightPx / 2}
+            width={Math.max(1, carrierWidthPx - 2)}
+            height={carrierInnerHeightPx}
+            fill="#050505"
+            stroke="rgba(120, 218, 169, 0.35)"
+            strokeWidth={0.55}
+            rx={3}
+          />
+        </g>
+
+        {sequenceWithDisplay.map((part, index) => {
+          const style = ROLE_STYLE[part.colorRole];
+          const x = mmToX(part.displayStartMm);
+          const widthPx = Math.max(4, part.lengthMm * pxPerMmX);
+          const outerHeightPx = Math.max(8, part.outerDiameterMm * diameterScale);
+          const y = centerYPx - outerHeightPx / 2;
+          const apertureOrInnerMm = part.apertureDiameterMm ?? part.innerDiameterMm;
+          const innerHeightPx =
+            apertureOrInnerMm && apertureOrInnerMm > 0
+              ? Math.max(4, Math.min(outerHeightPx - 4, apertureOrInnerMm * diameterScale))
+              : 0;
+          const isSelected = selectedId === part.id;
+          const labelY = y - 5 - (index % 2) * 10;
+
+          return (
+            <g
+              key={part.id}
+              role="button"
+              onClick={() => setSelectedId(part.id)}
+              style={{ cursor: "pointer" }}
+            >
+              <title>{partTooltipText(part)}</title>
+              <rect
+                x={x}
+                y={y}
+                width={widthPx}
+                height={outerHeightPx}
+                fill={style.fill}
+                stroke={isSelected ? "#ffffff" : style.stroke}
+                strokeWidth={isSelected ? 1.8 : 1.15}
+                rx={4}
+              />
+              {innerHeightPx > 0 && (
+                <rect
+                  x={x + 0.9}
+                  y={centerYPx - innerHeightPx / 2}
+                  width={Math.max(1, widthPx - 1.8)}
+                  height={innerHeightPx}
+                  fill="#050505"
+                  stroke="rgba(255,255,255,0.1)"
+                  strokeWidth={0.45}
+                  rx={2}
+                />
+              )}
+              {widthPx >= 12 && (
+                <text x={x + widthPx / 2} y={labelY} fill={style.text} textAnchor="middle" fontSize={8.6}>
+                  {part.shortLabel}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    );
   };
-  const statusBadge = (status: "ok" | "warning" | "error"): string => {
-    if (status === "error") return "ERROR";
-    if (status === "warning") return "WARNING";
-    return "OK";
+
+  const renderSimple25D = () => {
+    const isoDx = 11;
+    const isoDy = 8;
+
+    const drawPseudoTube = (params: {
+      x: number;
+      width: number;
+      outerHeight: number;
+      innerHeight: number;
+      role: AssemblyPreviewColorRole;
+      selected: boolean;
+      onClick: () => void;
+      title: string;
+      label?: string;
+    }) => {
+      const style = ROLE_STYLE[params.role];
+      const y = centerYPx - params.outerHeight / 2;
+      const innerY = centerYPx - params.innerHeight / 2;
+      const innerX = params.x + 1;
+      const innerWidth = Math.max(1, params.width - 2);
+      const stroke = params.selected ? "#ffffff" : style.stroke;
+      const strokeWidth = params.selected ? 1.8 : 1.15;
+
+      return (
+        <g role="button" onClick={params.onClick} style={{ cursor: "pointer" }}>
+          <title>{params.title}</title>
+
+          <polygon
+            points={`${params.x},${y} ${params.x + isoDx},${y - isoDy} ${params.x + params.width + isoDx},${y - isoDy} ${params.x + params.width},${y}`}
+            fill={style.top}
+            stroke={stroke}
+            strokeWidth={strokeWidth * 0.85}
+          />
+          <polygon
+            points={`${params.x + params.width},${y} ${params.x + params.width + isoDx},${y - isoDy} ${params.x + params.width + isoDx},${y + params.outerHeight - isoDy} ${params.x + params.width},${y + params.outerHeight}`}
+            fill={style.side}
+            stroke={stroke}
+            strokeWidth={strokeWidth * 0.85}
+          />
+
+          <rect
+            x={params.x}
+            y={y}
+            width={params.width}
+            height={params.outerHeight}
+            fill={style.fill}
+            stroke={stroke}
+            strokeWidth={strokeWidth}
+            rx={3}
+          />
+
+          {params.innerHeight > 0 && (
+            <>
+              <rect
+                x={innerX}
+                y={innerY}
+                width={innerWidth}
+                height={params.innerHeight}
+                fill="#050505"
+                stroke="rgba(255,255,255,0.12)"
+                strokeWidth={0.4}
+                rx={2}
+              />
+              <polygon
+                points={`${innerX},${innerY} ${innerX + isoDx},${innerY - isoDy} ${innerX + innerWidth + isoDx},${innerY - isoDy} ${innerX + innerWidth},${innerY}`}
+                fill="rgba(0,0,0,0.7)"
+                stroke="rgba(255,255,255,0.1)"
+                strokeWidth={0.25}
+              />
+              <polygon
+                points={`${innerX + innerWidth},${innerY} ${innerX + innerWidth + isoDx},${innerY - isoDy} ${innerX + innerWidth + isoDx},${innerY + params.innerHeight - isoDy} ${innerX + innerWidth},${innerY + params.innerHeight}`}
+                fill="rgba(0,0,0,0.78)"
+                stroke="rgba(255,255,255,0.1)"
+                strokeWidth={0.25}
+              />
+            </>
+          )}
+
+          {params.label && (
+            <text
+              x={params.x + params.width / 2 + isoDx * 0.35}
+              y={y - 8}
+              fill={style.text}
+              textAnchor="middle"
+              fontSize={8.6}
+            >
+              {params.label}
+            </text>
+          )}
+        </g>
+      );
+    };
+
+    const barrelOuterHeight = Math.max(14, preview.derived.fixedBarrelOuterDiameterMm * diameterScale);
+    const barrelInnerHeight = Math.max(
+      6,
+      Math.min(barrelOuterHeight - 4, preview.derived.fixedBarrelInnerDiameterMm * diameterScale)
+    );
+    const barrelX = mmToX(displayStackStartMm);
+    const barrelWidth = barrelVisualLengthMm * pxPerMmX;
+
+    const carrierOuterHeight = Math.max(12, preview.derived.carrierOuterDiameterMm * diameterScale);
+    const carrierInnerHeight = Math.max(
+      6,
+      Math.min(carrierOuterHeight - 4, preview.derived.carrierInnerDiameterMm * diameterScale)
+    );
+    const carrierX = mmToX(displayStackStartMm);
+    const carrierWidth = carrierVisualLengthMm * pxPerMmX;
+
+    return (
+      <svg width={canvasWidthPx} height={canvasHeightPx} className="block">
+        <line
+          x1={marginLeftPx - 36}
+          y1={centerYPx}
+          x2={canvasWidthPx - marginRightPx + 38}
+          y2={centerYPx}
+          stroke="#4d84c3"
+          strokeWidth={1.05}
+          strokeDasharray="3 5"
+        />
+
+        <text x={marginLeftPx - 20} y={24} fill="#8ea0b8" fontSize={11} textAnchor="start">
+          FRONT
+        </text>
+        <text x={canvasWidthPx - marginRightPx + 12} y={24} fill="#8ea0b8" fontSize={11} textAnchor="end">
+          SENSOR
+        </text>
+
+        {drawPseudoTube({
+          x: barrelX,
+          width: barrelWidth,
+          outerHeight: barrelOuterHeight,
+          innerHeight: barrelInnerHeight,
+          role: "barrel",
+          selected: selectedId === "__fixed_barrel",
+          onClick: () => setSelectedId("__fixed_barrel"),
+          title: overlayTooltipText(
+            "Fixed PL barrel",
+            preview.derived.fixedBarrelLengthMm,
+            preview.derived.fixedBarrelOuterDiameterMm,
+            preview.derived.fixedBarrelInnerDiameterMm
+          ),
+          label: "Fixed barrel"
+        })}
+
+        {drawPseudoTube({
+          x: carrierX,
+          width: carrierWidth,
+          outerHeight: carrierOuterHeight,
+          innerHeight: carrierInnerHeight,
+          role: "carrier",
+          selected: selectedId === "__carrier",
+          onClick: () => setSelectedId("__carrier"),
+          title: overlayTooltipText(
+            "Sliding optical carrier",
+            preview.derived.carrierLengthMm,
+            preview.derived.carrierOuterDiameterMm,
+            preview.derived.carrierInnerDiameterMm
+          ),
+          label: "Carrier"
+        })}
+
+        {sequenceWithDisplay.map((part, index) => {
+          const x = mmToX(part.displayStartMm);
+          const width = Math.max(4, part.lengthMm * pxPerMmX);
+          const outerHeight = Math.max(8, part.outerDiameterMm * diameterScale);
+          const apertureOrInnerMm = part.apertureDiameterMm ?? part.innerDiameterMm;
+          const innerHeight =
+            apertureOrInnerMm && apertureOrInnerMm > 0
+              ? Math.max(4, Math.min(outerHeight - 4, apertureOrInnerMm * diameterScale))
+              : 0;
+
+          return (
+            <g key={part.id} opacity={0.98}>
+              {drawPseudoTube({
+                x,
+                width,
+                outerHeight,
+                innerHeight,
+                role: part.colorRole,
+                selected: selectedId === part.id,
+                onClick: () => setSelectedId(part.id),
+                title: partTooltipText(part),
+                label: width >= 12 ? part.shortLabel : undefined
+              })}
+              {index % 2 === 1 && width >= 10 && (
+                <line
+                  x1={x + width / 2}
+                  y1={centerYPx - outerHeight / 2 - 2}
+                  x2={x + width / 2 + 4}
+                  y2={centerYPx - outerHeight / 2 - 14}
+                  stroke="rgba(220,230,240,0.35)"
+                  strokeWidth={0.6}
+                />
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    );
   };
 
   return (
@@ -101,172 +604,78 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">Assembly Preview</h3>
           <p className="text-xs text-labMuted">
-            Parametric preview from Stack + Auto-fit data. No OpenSCAD mesh rendering.
+            Parametric preview from Stack + Auto-fit dimensions. OpenSCAD/STL meshes are not rendered in-browser.
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant={viewMode === "assembled" ? "primary" : "secondary"}
-            onClick={() => setViewMode("assembled")}
-          >
-            Assembled
-          </Button>
-          <Button
-            type="button"
-            variant={viewMode === "exploded" ? "primary" : "secondary"}
-            onClick={() => setViewMode("exploded")}
-          >
-            Exploded
-          </Button>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-labBorder bg-[#0b0b0b] p-2">
+            <span className="text-[11px] uppercase tracking-[0.09em] text-labMuted">View mode</span>
+            <Button
+              type="button"
+              variant={viewMode === "side_2d" ? "primary" : "secondary"}
+              onClick={() => setViewMode("side_2d")}
+            >
+              2D Side
+            </Button>
+            <Button
+              type="button"
+              variant={viewMode === "view_25d" ? "primary" : "secondary"}
+              onClick={() => setViewMode("view_25d")}
+            >
+              2.5D / 3D
+            </Button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-labBorder bg-[#0b0b0b] p-2">
+            <span className="text-[11px] uppercase tracking-[0.09em] text-labMuted">Assembly mode</span>
+            <Button
+              type="button"
+              variant={assemblyMode === "assembled" ? "primary" : "secondary"}
+              onClick={() => setAssemblyMode("assembled")}
+            >
+              Assembled
+            </Button>
+            <Button
+              type="button"
+              variant={assemblyMode === "exploded" ? "primary" : "secondary"}
+              onClick={() => setAssemblyMode("exploded")}
+            >
+              Exploded
+            </Button>
+          </div>
         </div>
       </div>
 
-      {viewMode === "exploded" && (
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-labBorder bg-[#0b0b0b] px-3 py-2">
+        {LEGEND_ITEMS.map((item) => {
+          const style = ROLE_STYLE[item.role];
+          return (
+            <span key={item.label} className="inline-flex items-center gap-2 text-xs text-labMuted">
+              <span className="h-3.5 w-5 rounded-sm border" style={{ backgroundColor: style.fill, borderColor: style.stroke }} />
+              {item.label}
+            </span>
+          );
+        })}
+      </div>
+
+      {assemblyMode === "exploded" && (
         <p className="text-xs text-labMuted">
           Exploded view adds visual separation only. Z table remains true assembled positions.
         </p>
       )}
 
+      {selectedInfo && (
+        <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3 text-xs">
+          <p className="text-labText">{selectedInfo.title}</p>
+          <p className="mt-1 text-labMuted">{selectedInfo.body}</p>
+        </div>
+      )}
+
       <div className="overflow-x-auto rounded-xl border border-labBorder bg-[#060606]">
-        <svg width={canvasWidthPx} height={canvasHeightPx} className="block">
-          <line
-            x1={marginLeftPx - 30}
-            y1={centerYPx}
-            x2={canvasWidthPx - marginRightPx + 30}
-            y2={centerYPx}
-            stroke="#1d2f45"
-            strokeWidth={1}
-          />
-
-          <text x={marginLeftPx - 18} y={24} fill="#8f9db0" fontSize={11} textAnchor="start">
-            FRONT
-          </text>
-          <text x={canvasWidthPx - marginRightPx + 10} y={24} fill="#8f9db0" fontSize={11} textAnchor="end">
-            SENSOR
-          </text>
-
-          {(() => {
-            const barrelHeightPx = Math.max(14, preview.derived.fixedBarrelOuterDiameterMm * diameterScale);
-            const barrelInnerHeightPx = Math.max(
-              6,
-              Math.min(barrelHeightPx - 4, preview.derived.fixedBarrelInnerDiameterMm * diameterScale)
-            );
-            const barrelX = mmToX(displayStackStartMm);
-            const barrelWidthPx = barrelVisualLengthMm * pxPerMmX;
-            return (
-              <g>
-                <rect
-                  x={barrelX}
-                  y={centerYPx - barrelHeightPx / 2}
-                  width={barrelWidthPx}
-                  height={barrelHeightPx}
-                  fill="rgba(86, 116, 143, 0.12)"
-                  stroke="#6f88a1"
-                  strokeWidth={1.2}
-                  rx={10}
-                />
-                <rect
-                  x={barrelX + 1}
-                  y={centerYPx - barrelInnerHeightPx / 2}
-                  width={Math.max(1, barrelWidthPx - 2)}
-                  height={barrelInnerHeightPx}
-                  fill="#050505"
-                  stroke="#2c3a46"
-                  strokeWidth={0.6}
-                  rx={4}
-                />
-                <text x={barrelX + 8} y={centerYPx - barrelHeightPx / 2 - 4} fill="#8ea4bd" fontSize={9}>
-                  Fixed PL barrel
-                </text>
-              </g>
-            );
-          })()}
-
-          {(() => {
-            const carrierHeightPx = Math.max(12, preview.derived.carrierOuterDiameterMm * diameterScale);
-            const carrierInnerHeightPx = Math.max(
-              6,
-              Math.min(carrierHeightPx - 4, preview.derived.carrierInnerDiameterMm * diameterScale)
-            );
-            const carrierX = mmToX(displayStackStartMm);
-            const carrierWidthPx = carrierVisualLengthMm * pxPerMmX;
-            return (
-              <g>
-                <rect
-                  x={carrierX}
-                  y={centerYPx - carrierHeightPx / 2}
-                  width={carrierWidthPx}
-                  height={carrierHeightPx}
-                  fill="rgba(67, 164, 113, 0.14)"
-                  stroke="#63c793"
-                  strokeWidth={1.2}
-                  rx={8}
-                />
-                <rect
-                  x={carrierX + 1}
-                  y={centerYPx - carrierInnerHeightPx / 2}
-                  width={Math.max(1, carrierWidthPx - 2)}
-                  height={carrierInnerHeightPx}
-                  fill="#050505"
-                  stroke="#24503d"
-                  strokeWidth={0.6}
-                  rx={3}
-                />
-                <text x={carrierX + 8} y={centerYPx - carrierHeightPx / 2 - 4} fill="#78d6a9" fontSize={9}>
-                  Sliding optical carrier
-                </text>
-              </g>
-            );
-          })()}
-
-          {sequenceWithDisplay.map((part) => {
-            const style = PART_STYLE[part.type];
-            const x = mmToX(part.displayStartMm);
-            const widthPx = Math.max(2, part.lengthMm * pxPerMmX);
-            const outerHeightPx = Math.max(8, part.outerDiameterMm * diameterScale);
-            const y = centerYPx - outerHeightPx / 2;
-            const apertureOrInnerMm = part.apertureDiameterMm ?? part.innerDiameterMm;
-            const innerHeightPx =
-              apertureOrInnerMm && apertureOrInnerMm > 0
-                ? Math.max(4, Math.min(outerHeightPx - 4, apertureOrInnerMm * diameterScale))
-                : 0;
-            return (
-              <g key={part.id}>
-                <rect
-                  x={x}
-                  y={y}
-                  width={widthPx}
-                  height={outerHeightPx}
-                  fill={style.fill}
-                  stroke={style.stroke}
-                  strokeWidth={1.15}
-                  rx={4}
-                />
-                {innerHeightPx > 0 && (
-                  <rect
-                    x={x + 0.8}
-                    y={centerYPx - innerHeightPx / 2}
-                    width={Math.max(1, widthPx - 1.6)}
-                    height={innerHeightPx}
-                    fill="#050505"
-                    stroke="rgba(255,255,255,0.08)"
-                    strokeWidth={0.4}
-                    rx={2}
-                  />
-                )}
-                {widthPx > 34 && (
-                  <text x={x + widthPx / 2} y={y - 5} fill={style.text} textAnchor="middle" fontSize={8.8}>
-                    {shortLabel(part.label, 22)}
-                  </text>
-                )}
-              </g>
-            );
-          })}
-        </svg>
+        {viewMode === "side_2d" ? renderSide2D() : renderSimple25D()}
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3 text-xs text-labMuted">
           <p>
             Mechanical stack length: <span className="mono text-labText">{prettyMm(preview.derived.mechanicalStackLengthMm)} mm</span>
@@ -281,6 +690,7 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
             Fixed barrel length: <span className="mono text-labText">{prettyMm(preview.derived.fixedBarrelLengthMm)} mm</span>
           </p>
         </div>
+
         <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3 text-xs text-labMuted">
           <p>
             Largest glass diameter: <span className="mono text-labText">{prettyMm(preview.derived.largestGlassDiameterMm)} mm</span>
@@ -289,31 +699,42 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
             Target stack OD: <span className="mono text-labText">{prettyMm(preview.derived.targetStackOuterDiameterMm)} mm</span>
           </p>
           <p>
-            Carrier ID / OD:{" "}
-            <span className="mono text-labText">
-              {prettyMm(preview.derived.carrierInnerDiameterMm)} / {prettyMm(preview.derived.carrierOuterDiameterMm)} mm
-            </span>
+            Carrier ID / OD: <span className="mono text-labText">{prettyMm(preview.derived.carrierInnerDiameterMm)} / {prettyMm(preview.derived.carrierOuterDiameterMm)} mm</span>
           </p>
           <p>
-            Fixed barrel ID / OD:{" "}
-            <span className="mono text-labText">
-              {prettyMm(preview.derived.fixedBarrelInnerDiameterMm)} / {prettyMm(preview.derived.fixedBarrelOuterDiameterMm)} mm
-            </span>
+            Fixed barrel ID / OD: <span className="mono text-labText">{prettyMm(preview.derived.fixedBarrelInnerDiameterMm)} / {prettyMm(preview.derived.fixedBarrelOuterDiameterMm)} mm</span>
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3 text-xs text-labMuted">
+          <p>
+            Slot length: <span className="mono text-labText">{prettyMm(preview.derived.slotLengthMm)} mm</span>
+          </p>
+          <p>
+            Recommended focus travel: <span className="mono text-labText">{prettyMm(preview.derived.recommendedFocusTravelMm)} mm</span>
+          </p>
+          <p>
+            Recommended slot length: <span className="mono text-labText">{prettyMm(preview.derived.recommendedSlotLengthMm)} mm</span>
+          </p>
+          <p>
+            Target mount throat: <span className="mono text-labText">{prettyMm(preview.derived.targetMountThroatDiameterMm)} mm</span>
           </p>
         </div>
       </div>
 
       <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3">
         <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-labMuted">Fit Status</p>
-        {statuses.length === 0 ? (
-          <p className="text-xs text-labMuted">No fit status lines.</p>
+        {checksSorted.length === 0 ? (
+          <p className="text-xs text-labMuted">No fit checks available.</p>
         ) : (
-          <div className="space-y-1">
-            {statuses.map((line, index) => (
-              <p key={`${line.status}-${line.message}-${index}`} className={`text-xs ${statusColor(line.status)}`}>
-                <span className="mono mr-2">{statusBadge(line.status)}</span>
-                {line.message}
-              </p>
+          <div className="space-y-2">
+            {checksSorted.map((check, index) => (
+              <div key={`${check.id}-${index}`} className={`text-xs ${checkStatusClass(check.status)}`}>
+                <p className="mono">
+                  {checkStatusIcon(check.status)} {check.label}
+                </p>
+                <p className="pl-4">{check.message}</p>
+              </div>
             ))}
           </div>
         )}
@@ -331,31 +752,47 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
               <th className="px-3 py-2">Length</th>
               <th className="px-3 py-2">OD</th>
               <th className="px-3 py-2">ID / Aperture</th>
-              <th className="px-3 py-2">Notes</th>
+              <th className="px-3 py-2">Source / Notes</th>
             </tr>
           </thead>
           <tbody>
-            {sequenceWithDisplay.map((part, index) => (
-              <tr key={part.id} className="border-b border-labBorder/60 last:border-b-0">
-                <td className="px-3 py-2 mono text-labText">{String(index + 1).padStart(2, "0")}</td>
-                <td className="px-3 py-2 text-labText">{part.label}</td>
-                <td className="px-3 py-2 mono">{part.type}</td>
-                <td className="px-3 py-2 mono">{prettyMm(part.startZMm)}</td>
-                <td className="px-3 py-2 mono">{prettyMm(part.endZMm)}</td>
-                <td className="px-3 py-2 mono">{prettyMm(part.lengthMm)}</td>
-                <td className="px-3 py-2 mono">{prettyMm(part.outerDiameterMm)}</td>
-                <td className="px-3 py-2 mono">
-                  {part.apertureDiameterMm
-                    ? `A ${prettyMm(part.apertureDiameterMm)}`
-                    : part.innerDiameterMm
-                      ? `ID ${prettyMm(part.innerDiameterMm)}`
-                      : "-"}
-                </td>
-                <td className="px-3 py-2">{part.notes ?? "-"}</td>
-              </tr>
-            ))}
+            {sequenceWithDisplay.map((part, index) => {
+              const isSelected = selectedId === part.id;
+              return (
+                <tr
+                  key={part.id}
+                  className={`border-b border-labBorder/60 last:border-b-0 ${isSelected ? "bg-[#142032]" : ""}`}
+                  onClick={() => setSelectedId(part.id)}
+                  style={{ cursor: "pointer" }}
+                  title={partTooltipText(part)}
+                >
+                  <td className="px-3 py-2 mono text-labText">{String(index + 1).padStart(2, "0")}</td>
+                  <td className="px-3 py-2 text-labText">{part.label}</td>
+                  <td className="px-3 py-2 mono">{part.type}</td>
+                  <td className="px-3 py-2 mono">{prettyMm(part.startZMm)}</td>
+                  <td className="px-3 py-2 mono">{prettyMm(part.endZMm)}</td>
+                  <td className="px-3 py-2 mono">{prettyMm(part.lengthMm)}</td>
+                  <td className="px-3 py-2 mono">{prettyMm(part.outerDiameterMm)}</td>
+                  <td className="px-3 py-2 mono">
+                    {part.apertureDiameterMm
+                      ? `A ${prettyMm(part.apertureDiameterMm)}`
+                      : part.innerDiameterMm
+                        ? `ID ${prettyMm(part.innerDiameterMm)}`
+                        : "-"}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className="text-labText">{part.sourceLabel ?? "-"}</span>
+                    {part.notes ? <span className="text-labMuted"> · {part.notes}</span> : null}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+      </div>
+
+      <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3">
+        <p className="text-xs text-labMuted">{preview.limitations[0]}</p>
       </div>
     </div>
   );
