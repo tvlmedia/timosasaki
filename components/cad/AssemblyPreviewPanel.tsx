@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/common/Button";
+import { ThreeAssemblyPreview } from "@/components/cad/ThreeAssemblyPreview";
 import {
   getAssemblyPreviewData,
   type AssemblyPreviewCheck,
@@ -11,7 +12,7 @@ import {
 import type { LensProject } from "@/types";
 
 type AssemblyMode = "assembled" | "exploded";
-type PreviewViewMode = "side_2d" | "view_25d";
+type PreviewViewMode = "side_2d" | "interactive_3d";
 
 type DisplayPart = AssemblyPreviewPart & {
   displayStartMm: number;
@@ -139,6 +140,8 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
   const [assemblyMode, setAssemblyMode] = useState<AssemblyMode>("assembled");
   const [viewMode, setViewMode] = useState<PreviewViewMode>("side_2d");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [threeAvailability, setThreeAvailability] = useState<"unknown" | "ready" | "unavailable">("unknown");
+  const [threeResetSignal, setThreeResetSignal] = useState(0);
 
   const preview = useMemo(() => getAssemblyPreviewData(project), [project]);
 
@@ -228,6 +231,8 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
     }
     return null;
   }, [selectedPart, selectedId, preview.derived]);
+
+  const show3dFallback = viewMode === "interactive_3d" && threeAvailability === "unavailable";
 
   const renderSide2D = () => {
     const barrelStyle = ROLE_STYLE.barrel;
@@ -396,208 +401,6 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
     );
   };
 
-  const renderSimple25D = () => {
-    const isoDx = 11;
-    const isoDy = 8;
-
-    const drawPseudoTube = (params: {
-      x: number;
-      width: number;
-      outerHeight: number;
-      innerHeight: number;
-      role: AssemblyPreviewColorRole;
-      selected: boolean;
-      onClick: () => void;
-      title: string;
-      label?: string;
-    }) => {
-      const style = ROLE_STYLE[params.role];
-      const y = centerYPx - params.outerHeight / 2;
-      const innerY = centerYPx - params.innerHeight / 2;
-      const innerX = params.x + 1;
-      const innerWidth = Math.max(1, params.width - 2);
-      const stroke = params.selected ? "#ffffff" : style.stroke;
-      const strokeWidth = params.selected ? 1.8 : 1.15;
-
-      return (
-        <g role="button" onClick={params.onClick} style={{ cursor: "pointer" }}>
-          <title>{params.title}</title>
-
-          <polygon
-            points={`${params.x},${y} ${params.x + isoDx},${y - isoDy} ${params.x + params.width + isoDx},${y - isoDy} ${params.x + params.width},${y}`}
-            fill={style.top}
-            stroke={stroke}
-            strokeWidth={strokeWidth * 0.85}
-          />
-          <polygon
-            points={`${params.x + params.width},${y} ${params.x + params.width + isoDx},${y - isoDy} ${params.x + params.width + isoDx},${y + params.outerHeight - isoDy} ${params.x + params.width},${y + params.outerHeight}`}
-            fill={style.side}
-            stroke={stroke}
-            strokeWidth={strokeWidth * 0.85}
-          />
-
-          <rect
-            x={params.x}
-            y={y}
-            width={params.width}
-            height={params.outerHeight}
-            fill={style.fill}
-            stroke={stroke}
-            strokeWidth={strokeWidth}
-            rx={3}
-          />
-
-          {params.innerHeight > 0 && (
-            <>
-              <rect
-                x={innerX}
-                y={innerY}
-                width={innerWidth}
-                height={params.innerHeight}
-                fill="#050505"
-                stroke="rgba(255,255,255,0.12)"
-                strokeWidth={0.4}
-                rx={2}
-              />
-              <polygon
-                points={`${innerX},${innerY} ${innerX + isoDx},${innerY - isoDy} ${innerX + innerWidth + isoDx},${innerY - isoDy} ${innerX + innerWidth},${innerY}`}
-                fill="rgba(0,0,0,0.7)"
-                stroke="rgba(255,255,255,0.1)"
-                strokeWidth={0.25}
-              />
-              <polygon
-                points={`${innerX + innerWidth},${innerY} ${innerX + innerWidth + isoDx},${innerY - isoDy} ${innerX + innerWidth + isoDx},${innerY + params.innerHeight - isoDy} ${innerX + innerWidth},${innerY + params.innerHeight}`}
-                fill="rgba(0,0,0,0.78)"
-                stroke="rgba(255,255,255,0.1)"
-                strokeWidth={0.25}
-              />
-            </>
-          )}
-
-          {params.label && (
-            <text
-              x={params.x + params.width / 2 + isoDx * 0.35}
-              y={y - 8}
-              fill={style.text}
-              textAnchor="middle"
-              fontSize={8.6}
-            >
-              {params.label}
-            </text>
-          )}
-        </g>
-      );
-    };
-
-    const barrelOuterHeight = Math.max(14, preview.derived.fixedBarrelOuterDiameterMm * diameterScale);
-    const barrelInnerHeight = Math.max(
-      6,
-      Math.min(barrelOuterHeight - 4, preview.derived.fixedBarrelInnerDiameterMm * diameterScale)
-    );
-    const barrelX = mmToX(displayStackStartMm);
-    const barrelWidth = barrelVisualLengthMm * pxPerMmX;
-
-    const carrierOuterHeight = Math.max(12, preview.derived.carrierOuterDiameterMm * diameterScale);
-    const carrierInnerHeight = Math.max(
-      6,
-      Math.min(carrierOuterHeight - 4, preview.derived.carrierInnerDiameterMm * diameterScale)
-    );
-    const carrierX = mmToX(displayStackStartMm);
-    const carrierWidth = carrierVisualLengthMm * pxPerMmX;
-
-    return (
-      <svg width={canvasWidthPx} height={canvasHeightPx} className="block">
-        <line
-          x1={marginLeftPx - 36}
-          y1={centerYPx}
-          x2={canvasWidthPx - marginRightPx + 38}
-          y2={centerYPx}
-          stroke="#4d84c3"
-          strokeWidth={1.05}
-          strokeDasharray="3 5"
-        />
-
-        <text x={marginLeftPx - 20} y={24} fill="#8ea0b8" fontSize={11} textAnchor="start">
-          FRONT
-        </text>
-        <text x={canvasWidthPx - marginRightPx + 12} y={24} fill="#8ea0b8" fontSize={11} textAnchor="end">
-          SENSOR
-        </text>
-
-        {drawPseudoTube({
-          x: barrelX,
-          width: barrelWidth,
-          outerHeight: barrelOuterHeight,
-          innerHeight: barrelInnerHeight,
-          role: "barrel",
-          selected: selectedId === "__fixed_barrel",
-          onClick: () => setSelectedId("__fixed_barrel"),
-          title: overlayTooltipText(
-            "Fixed PL barrel",
-            preview.derived.fixedBarrelLengthMm,
-            preview.derived.fixedBarrelOuterDiameterMm,
-            preview.derived.fixedBarrelInnerDiameterMm
-          ),
-          label: "Fixed barrel"
-        })}
-
-        {drawPseudoTube({
-          x: carrierX,
-          width: carrierWidth,
-          outerHeight: carrierOuterHeight,
-          innerHeight: carrierInnerHeight,
-          role: "carrier",
-          selected: selectedId === "__carrier",
-          onClick: () => setSelectedId("__carrier"),
-          title: overlayTooltipText(
-            "Sliding optical carrier",
-            preview.derived.carrierLengthMm,
-            preview.derived.carrierOuterDiameterMm,
-            preview.derived.carrierInnerDiameterMm
-          ),
-          label: "Carrier"
-        })}
-
-        {sequenceWithDisplay.map((part, index) => {
-          const x = mmToX(part.displayStartMm);
-          const width = Math.max(4, part.lengthMm * pxPerMmX);
-          const outerHeight = Math.max(8, part.outerDiameterMm * diameterScale);
-          const apertureOrInnerMm = part.apertureDiameterMm ?? part.innerDiameterMm;
-          const innerHeight =
-            apertureOrInnerMm && apertureOrInnerMm > 0
-              ? Math.max(4, Math.min(outerHeight - 4, apertureOrInnerMm * diameterScale))
-              : 0;
-
-          return (
-            <g key={part.id} opacity={0.98}>
-              {drawPseudoTube({
-                x,
-                width,
-                outerHeight,
-                innerHeight,
-                role: part.colorRole,
-                selected: selectedId === part.id,
-                onClick: () => setSelectedId(part.id),
-                title: partTooltipText(part),
-                label: width >= 12 ? part.shortLabel : undefined
-              })}
-              {index % 2 === 1 && width >= 10 && (
-                <line
-                  x1={x + width / 2}
-                  y1={centerYPx - outerHeight / 2 - 2}
-                  x2={x + width / 2 + 4}
-                  y2={centerYPx - outerHeight / 2 - 14}
-                  stroke="rgba(220,230,240,0.35)"
-                  strokeWidth={0.6}
-                />
-              )}
-            </g>
-          );
-        })}
-      </svg>
-    );
-  };
-
   return (
     <div className="panel space-y-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -619,10 +422,10 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
             </Button>
             <Button
               type="button"
-              variant={viewMode === "view_25d" ? "primary" : "secondary"}
-              onClick={() => setViewMode("view_25d")}
+              variant={viewMode === "interactive_3d" ? "primary" : "secondary"}
+              onClick={() => setViewMode("interactive_3d")}
             >
-              2.5D / 3D
+              3D Interactive
             </Button>
           </div>
 
@@ -664,6 +467,17 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
         </p>
       )}
 
+      {viewMode === "interactive_3d" && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="secondary" onClick={() => setThreeResetSignal((value) => value + 1)}>
+            Reset view
+          </Button>
+          <p className="text-xs text-labMuted">
+            3D preview is simplified/parametric. Final geometry should still be checked in OpenSCAD/Cura/FreeCAD.
+          </p>
+        </div>
+      )}
+
       {selectedInfo && (
         <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3 text-xs">
           <p className="text-labText">{selectedInfo.title}</p>
@@ -671,9 +485,24 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-labBorder bg-[#060606]">
-        {viewMode === "side_2d" ? renderSide2D() : renderSimple25D()}
-      </div>
+      {show3dFallback && (
+        <p className="text-xs text-labWarning">
+          3D preview unavailable; using 2D parametric preview.
+        </p>
+      )}
+
+      {viewMode === "interactive_3d" && !show3dFallback ? (
+        <ThreeAssemblyPreview
+          parts={sequenceWithDisplay}
+          derived={preview.derived}
+          selectedId={selectedId}
+          onSelectId={setSelectedId}
+          onAvailabilityChange={(available) => setThreeAvailability(available ? "ready" : "unavailable")}
+          resetSignal={threeResetSignal}
+        />
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-labBorder bg-[#060606]">{renderSide2D()}</div>
+      )}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3 text-xs text-labMuted">
