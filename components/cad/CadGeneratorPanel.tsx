@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CadPartSelector, type CadPartType } from "@/components/cad/CadPartSelector";
 import { PartSpecCard } from "@/components/cad/PartSpecCard";
 import { ScadCodeViewer } from "@/components/cad/ScadCodeViewer";
+import { Button } from "@/components/common/Button";
 import { NumberInput } from "@/components/common/NumberInput";
 import { Select } from "@/components/common/Select";
 import { WarningBox } from "@/components/common/WarningBox";
@@ -16,6 +17,7 @@ import {
   getLargestGlassDiameter,
   getRecommendedBarrelInnerDiameter,
   getRecommendedBarrelOuterDiameter,
+  getStackWarnings,
   getTotalStackLength
 } from "@/lib/calculations";
 import { generateFreecadMacro, type FreecadPayload } from "@/lib/freecad";
@@ -106,6 +108,23 @@ type ResolvedCupRetainingSide = "front" | "rear" | "both" | "none";
 type CadSourceCandidate = {
   id: string;
   sourceItem: StackItem;
+};
+
+type PackageSmallPart = {
+  label: string;
+  payload: ScadPayload;
+  sourceStackItemName?: string;
+};
+
+type BuiltAllPartsPackage = {
+  builtAtIso: string;
+  smallPartsScad: string;
+  slidingCarrierScad: string;
+  fixedPlBarrelScad: string;
+  summaryText: string;
+  generatedPartLabels: string[];
+  warnings: string[];
+  errors: string[];
 };
 
 type CascadeSizing = {
@@ -278,6 +297,125 @@ function derivePlStlPathFromStepPath(stepPathRaw?: string): string {
   return stepPath.replace(/\.step$/i, ".stl");
 }
 
+function formatScadValue(value: number): string {
+  if (!Number.isFinite(value)) return "0.000";
+  return value.toFixed(3);
+}
+
+function indentScadCode(code: string, spaces = 2): string {
+  const prefix = " ".repeat(spaces);
+  return code
+    .split("\n")
+    .map((line) => (line.length ? `${prefix}${line}` : line))
+    .join("\n");
+}
+
+function sanitizeScadModuleName(label: string): string {
+  const safe = safeFileName(label).replace(/[^a-z0-9_]/g, "_");
+  return safe ? safe : "part";
+}
+
+function getPackageBaseFileName(projectName: string): string {
+  const safeProjectName = safeFileName(projectName) || "project";
+  return `TimoSasaki_${safeProjectName}`;
+}
+
+function getPayloadFootprintMm(payload: ScadPayload): { widthMm: number; depthMm: number; xOffsetMm: number; yOffsetMm: number; zLiftMm: number } {
+  if (payload.type === "element_cup") {
+    const d = Math.max(2, toPositive(payload.params.outerDiameterMm) || toPositive(payload.params.glassDiameterMm));
+    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2, zLiftMm: 0 };
+  }
+  if (payload.type === "spacer_ring") {
+    const d = Math.max(2, toPositive(payload.params.outerDiameterMm));
+    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2, zLiftMm: 0 };
+  }
+  if (payload.type === "iris_disk") {
+    const d = Math.max(2, toPositive(payload.params.diskDiameterMm));
+    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2, zLiftMm: 0 };
+  }
+  if (payload.type === "diffusion_holder") {
+    const d = Math.max(2, toPositive(payload.params.diskDiameterMm) + toPositive(payload.params.wallThicknessMm) * 2);
+    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2, zLiftMm: 0 };
+  }
+  if (payload.type === "guide_pin") {
+    const shaftLengthMm = Math.max(1, toPositive(payload.params.pinShaftLengthMm));
+    const headDiameterMm = Math.max(1, toPositive(payload.params.pinHeadDiameterMm));
+    const quantity = Math.max(1, Math.round(payload.params.quantity));
+    const depthMm = quantity * headDiameterMm + (quantity - 1) * 2.0;
+    return {
+      widthMm: shaftLengthMm,
+      depthMm,
+      xOffsetMm: 0,
+      yOffsetMm: headDiameterMm / 2,
+      zLiftMm: headDiameterMm / 2
+    };
+  }
+  return { widthMm: 30, depthMm: 30, xOffsetMm: 15, yOffsetMm: 15, zLiftMm: 0 };
+}
+
+function buildSmallPartsPlateScad(parts: PackageSmallPart[]): string {
+  const partSpacingMm = 8.0;
+  const rowSpacingMm = 8.0;
+  const plateMarginMm = 5.0;
+  const maxRowWidthMm = 220.0;
+
+  let cursorX = plateMarginMm;
+  let cursorY = plateMarginMm;
+  let rowDepthMm = 0;
+
+  const placements = parts.map((entry) => {
+    const footprint = getPayloadFootprintMm(entry.payload);
+    const widthWithSpacing = footprint.widthMm + partSpacingMm;
+    const depthWithSpacing = footprint.depthMm + rowSpacingMm;
+    if (cursorX > plateMarginMm && cursorX + footprint.widthMm > maxRowWidthMm - plateMarginMm) {
+      cursorX = plateMarginMm;
+      cursorY += rowDepthMm;
+      rowDepthMm = 0;
+    }
+    const placement = {
+      xMm: cursorX + footprint.xOffsetMm,
+      yMm: cursorY + footprint.yOffsetMm,
+      zMm: footprint.zLiftMm
+    };
+    cursorX += widthWithSpacing;
+    rowDepthMm = Math.max(rowDepthMm, depthWithSpacing);
+    return placement;
+  });
+
+  const moduleBlocks = parts
+    .map((entry, index) => {
+      const moduleName = `part_${String(index + 1).padStart(2, "0")}_${sanitizeScadModuleName(entry.label)}`;
+      const code = generateScad(entry.payload).trimEnd();
+      return `// Part ${String(index + 1).padStart(2, "0")}: ${entry.label}
+module ${moduleName}() {
+${indentScadCode(code, 2)}
+}
+`;
+    })
+    .join("\n");
+
+  const placementCalls = parts
+    .map((entry, index) => {
+      const moduleName = `part_${String(index + 1).padStart(2, "0")}_${sanitizeScadModuleName(entry.label)}`;
+      const placement = placements[index];
+      return `translate([${formatScadValue(placement.xMm)}, ${formatScadValue(placement.yMm)}, ${formatScadValue(placement.zMm)}]) ${moduleName}();`;
+    })
+    .join("\n");
+
+  return `// Timo Sasaki Lens Lab — Build All Parts Package (small parts plate)
+// Small parts grouped on one OpenSCAD print plate.
+// Carrier and fixed PL barrel are exported as separate files.
+
+part_spacing_mm = ${formatScadValue(partSpacingMm)};
+row_spacing_mm = ${formatScadValue(rowSpacingMm)};
+plate_margin_mm = ${formatScadValue(plateMarginMm)};
+
+${moduleBlocks}
+// Placement
+${placementCalls}
+`;
+}
+
 function estimateMainBarrelLengthMm(project: LensProject, source?: StackItem): number {
   const sourceBarrel = source?.type === "barrel" ? source : undefined;
   if (sourceBarrel && sourceBarrel.lengthMm > 0) {
@@ -367,6 +505,30 @@ function getNearestGlassOnSide(
     index += direction;
   }
   return undefined;
+}
+
+function getApertureCandidate(item?: StackItem): number {
+  if (!item) return 0;
+  if (item.type === "glass") return toPositive(item.clearApertureMm ?? item.diameterMm - 2);
+  if (item.type === "iris") return toPositive(item.apertureDiameterMm);
+  if (item.type === "diffusion") return toPositive(item.clearCenterDiameterMm);
+  return 0;
+}
+
+function getNearestApertureOnSide(items: StackItem[], fromIndex: number, direction: -1 | 1): number {
+  let index = fromIndex + direction;
+  while (index >= 0 && index < items.length) {
+    const candidate = getApertureCandidate(items[index]);
+    if (candidate > 0) return candidate;
+    index += direction;
+  }
+  return 0;
+}
+
+function getNearbyAperture(items: StackItem[], index: number): number {
+  const left = getNearestApertureOnSide(items, index, -1);
+  const right = getNearestApertureOnSide(items, index, 1);
+  return Math.max(left, right);
 }
 
 function estimateCupOffsetsForGlass(
@@ -1472,6 +1634,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     Math.max(2.0, project.cadDefaults.plReferenceOverlapMm ?? 2.0)
   );
   const [guidePinOverrides, setGuidePinOverrides] = useState<GuidePinOverrides>({});
+  const [builtAllPartsPackage, setBuiltAllPartsPackage] = useState<BuiltAllPartsPackage | null>(null);
   const plAssemblyIncludeMain = project.cadDefaults.plAssemblyIncludeMainBarrelSection ?? true;
   const plAssemblyIncludeCarrier = project.cadDefaults.plAssemblyIncludeMovingCarrier ?? true;
   const plAssemblyIncludePins = project.cadDefaults.plAssemblyIncludeGuidePins ?? true;
@@ -1935,6 +2098,455 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     ...slidingCarrierValidationWarnings,
     ...guidePinValidationWarnings
   ])];
+  const buildAllPartsPackage = () => {
+    const warnings: string[] = [];
+    const errors: string[] = [];
+    const orderedStackItems = [...project.stackItems].sort((a, b) => a.positionIndex - b.positionIndex);
+    const generatedPartLabels: string[] = [];
+    const smallParts: PackageSmallPart[] = [];
+
+    const pushWarning = (line: string) => {
+      if (line.trim()) warnings.push(line.trim());
+    };
+    const pushError = (line: string) => {
+      if (line.trim()) errors.push(line.trim());
+    };
+
+    if (orderedStackItems.length === 0) {
+      pushError("No stack items found. Add stack items before building a package.");
+    }
+
+    const glassItems = orderedStackItems.filter(
+      (item): item is Extract<StackItem, { type: "glass" }> => item.type === "glass"
+    );
+    if (glassItems.length === 0) {
+      pushError("No glass items found. At least one glass element/group is required.");
+    }
+
+    getStackWarnings(orderedStackItems, project.cadDefaults).forEach(pushWarning);
+    autoFitSystemWarnings.forEach(pushWarning);
+    if (!focusDerived.recommendedPrototypeTravelMm || focusDerived.recommendedPrototypeTravelMm <= 0) {
+      pushWarning("Focus travel recommendation unavailable.");
+    }
+    if (!focusDerived.targetMountThroatDiameterMm || focusDerived.targetMountThroatDiameterMm <= 0) {
+      pushWarning("PL throat measurement is unknown. Measure actual mount throat before finalizing fit.");
+    }
+
+    const validatePayload = (entry: PackageSmallPart) => {
+      const { payload, label } = entry;
+      if (payload.type === "element_cup") {
+        if (toPositive(payload.params.glassDiameterMm) <= 0) {
+          pushError(`${label}: missing glass diameter.`);
+        }
+        if (toPositive(payload.params.glassThicknessMm) <= 0) {
+          pushError(`${label}: non-positive glass/cup thickness.`);
+        }
+        if (toPositive(payload.params.outerDiameterMm) <= 0) {
+          pushError(`${label}: non-positive cup outer diameter.`);
+        }
+      }
+      if (payload.type === "spacer_ring") {
+        if (toPositive(payload.params.thicknessMm) <= 0) {
+          pushError(`${label}: spacer thickness is non-positive.`);
+        }
+        if (toPositive(payload.params.outerDiameterMm) <= toPositive(payload.params.innerDiameterMm)) {
+          pushError(`${label}: spacer OD must be larger than spacer ID.`);
+        }
+      }
+      if (payload.type === "iris_disk") {
+        if (toPositive(payload.params.thicknessMm) <= 0) {
+          pushError(`${label}: insert thickness is non-positive.`);
+        }
+        if (toPositive(payload.params.diskDiameterMm) <= 0) {
+          pushError(`${label}: insert disk diameter is missing.`);
+        }
+        if (toPositive(payload.params.apertureDiameterMm) <= 0) {
+          pushError(`${label}: insert aperture diameter is missing.`);
+        }
+        if (toPositive(payload.params.apertureDiameterMm) >= toPositive(payload.params.diskDiameterMm)) {
+          pushError(`${label}: aperture must be smaller than disk diameter.`);
+        }
+      }
+      if (payload.type === "diffusion_holder") {
+        if (toPositive(payload.params.holderThicknessMm) <= 0) {
+          pushError(`${label}: diffusion holder thickness is non-positive.`);
+        }
+        if (toPositive(payload.params.diskDiameterMm) <= 0) {
+          pushError(`${label}: diffusion disk diameter is missing.`);
+        }
+      }
+      if (payload.type === "guide_pin") {
+        if (toPositive(payload.params.pinShaftDiameterMm) <= 0 || toPositive(payload.params.pinShaftLengthMm) <= 0) {
+          pushError(`${label}: guide pin shaft dimensions must be positive.`);
+        }
+        if (toPositive(payload.params.pinHeadDiameterMm) <= 0 || toPositive(payload.params.pinHeadThicknessMm) <= 0) {
+          pushError(`${label}: guide pin head dimensions must be positive.`);
+        }
+      }
+    };
+
+    const pushSmallPart = (label: string, payload: ScadPayload, sourceStackItemName?: string) => {
+      const part: PackageSmallPart = { label, payload, sourceStackItemName };
+      validatePayload(part);
+      generatedPartLabels.push(label);
+      smallParts.push(part);
+    };
+
+    glassItems.forEach((glass, index) => {
+      const cupPayload = createPayload(
+        project,
+        "element_cup",
+        glass,
+        undefined,
+        slidingCarrierOverrides,
+        cascadeSizing,
+        guidePinOverrides
+      );
+      if (cupPayload.type === "element_cup") {
+        pushSmallPart(`Lens cup ${index + 1}: ${glass.name}`, cupPayload, glass.name);
+      }
+    });
+
+    orderedStackItems.forEach((item, index) => {
+      if (item.type !== "spacer") return;
+      const desiredOpticalAirGapMm = getSpacerDesiredOpticalAirGapMm(item);
+      const nearbyApertureMm = getNearbyAperture(orderedStackItems, index);
+      const layouts = calculateAirspaceInsertLayouts(desiredOpticalAirGapMm, item.insertedItems, {
+        targetStackOuterDiameterMm: cascadeSizing.targetStackOuterDiameterMm,
+        nearbyClearApertureMm: nearbyApertureMm
+      });
+
+      if (!layouts.length) {
+        const spacerPayload = createPayload(
+          project,
+          "spacer_ring",
+          item,
+          undefined,
+          slidingCarrierOverrides,
+          cascadeSizing,
+          guidePinOverrides
+        );
+        if (spacerPayload.type === "spacer_ring") {
+          pushSmallPart(`AirSpace spacer: ${item.name}`, spacerPayload, item.name);
+        }
+        return;
+      }
+
+      layouts.forEach((layout, layoutIndex) => {
+        layout.warnings.forEach((warning) => pushWarning(`${layout.item.label}: ${warning}`));
+        const beforeThicknessMm = Number(layout.spacerBeforeMm.toFixed(3));
+        const afterThicknessMm = Number(layout.spacerAfterMm.toFixed(3));
+
+        if (beforeThicknessMm <= 0) {
+          pushError(`${layout.item.label}: spacer before insert is non-positive.`);
+        } else {
+          const virtualBeforeSpacer: Extract<StackItem, { type: "spacer" }> = {
+            ...item,
+            id: `${item.id}::${layout.item.id}::before`,
+            name: `${item.name} spacer before ${layout.item.label}`,
+            thicknessMm: beforeThicknessMm,
+            desiredOpticalAirGapMm: beforeThicknessMm,
+            physicalSpacerThicknessMm: beforeThicknessMm,
+            physicalSpacerThicknessSource: "same_as_airspace",
+            insertedItems: [],
+            insertedItemsTotalThicknessMm: 0
+          };
+          const spacerBeforePayload = createPayload(
+            project,
+            "spacer_ring",
+            virtualBeforeSpacer,
+            undefined,
+            slidingCarrierOverrides,
+            cascadeSizing,
+            guidePinOverrides
+          );
+          if (spacerBeforePayload.type === "spacer_ring") {
+            pushSmallPart(
+              `AirSpace split spacer before (${layoutIndex + 1}): ${item.name}`,
+              spacerBeforePayload,
+              item.name
+            );
+          }
+        }
+
+        const fallbackDiskDiameterMm =
+          toPositive(layout.item.diskDiameterMm) > 0
+            ? (layout.item.diskDiameterMm as number)
+            : cascadeSizing.targetStackOuterDiameterMm;
+
+        if (layout.item.type === "diffusion") {
+          const virtualDiffusion: Extract<StackItem, { type: "diffusion" }> = {
+            id: `${item.id}::${layout.item.id}::diff`,
+            type: "diffusion",
+            name: layout.item.label,
+            positionIndex: item.positionIndex,
+            opticalType: "DIFFUSION",
+            diskDiameterMm: Number(Math.max(0.1, fallbackDiskDiameterMm).toFixed(3)),
+            clearCenterDiameterMm: Number(
+              Math.max(0.1, toPositive(layout.item.apertureDiameterMm) || 12).toFixed(3)
+            ),
+            diffusionOuterDiameterMm: Number(Math.max(0.1, fallbackDiskDiameterMm - 1.2).toFixed(3)),
+            thicknessMm: Number(Math.max(0.1, toPositive(layout.item.thicknessMm)).toFixed(3))
+          };
+          const diffusionPayload = createPayload(
+            project,
+            "diffusion_holder",
+            virtualDiffusion,
+            undefined,
+            slidingCarrierOverrides,
+            cascadeSizing,
+            guidePinOverrides
+          );
+          if (diffusionPayload.type === "diffusion_holder") {
+            pushSmallPart(`Insert diffusion disk: ${layout.item.label}`, diffusionPayload, item.name);
+          }
+        } else {
+          const virtualIris: Extract<StackItem, { type: "iris" }> = {
+            id: `${item.id}::${layout.item.id}::disk`,
+            type: "iris",
+            name: layout.item.label,
+            positionIndex: item.positionIndex,
+            opticalType: layout.item.type === "filter" ? "FILTER" : layout.item.type === "custom" ? "EFFECT" : "IRIS",
+            diskDiameterMm: Number(Math.max(0.1, fallbackDiskDiameterMm).toFixed(3)),
+            apertureDiameterMm: Number(
+              Math.max(0.1, toPositive(layout.item.apertureDiameterMm) || 14).toFixed(3)
+            ),
+            thicknessMm: Number(Math.max(0.1, toPositive(layout.item.thicknessMm)).toFixed(3)),
+            isOval: false
+          };
+          const irisPayload = createPayload(
+            project,
+            "iris_disk",
+            virtualIris,
+            undefined,
+            slidingCarrierOverrides,
+            cascadeSizing,
+            guidePinOverrides
+          );
+          if (irisPayload.type === "iris_disk") {
+            pushSmallPart(`Insert ${layout.item.type} disk: ${layout.item.label}`, irisPayload, item.name);
+          }
+        }
+
+        if (afterThicknessMm <= 0) {
+          pushError(`${layout.item.label}: spacer after insert is non-positive.`);
+        } else {
+          const virtualAfterSpacer: Extract<StackItem, { type: "spacer" }> = {
+            ...item,
+            id: `${item.id}::${layout.item.id}::after`,
+            name: `${item.name} spacer after ${layout.item.label}`,
+            thicknessMm: afterThicknessMm,
+            desiredOpticalAirGapMm: afterThicknessMm,
+            physicalSpacerThicknessMm: afterThicknessMm,
+            physicalSpacerThicknessSource: "same_as_airspace",
+            insertedItems: [],
+            insertedItemsTotalThicknessMm: 0
+          };
+          const spacerAfterPayload = createPayload(
+            project,
+            "spacer_ring",
+            virtualAfterSpacer,
+            undefined,
+            slidingCarrierOverrides,
+            cascadeSizing,
+            guidePinOverrides
+          );
+          if (spacerAfterPayload.type === "spacer_ring") {
+            pushSmallPart(
+              `AirSpace split spacer after (${layoutIndex + 1}): ${item.name}`,
+              spacerAfterPayload,
+              item.name
+            );
+          }
+        }
+      });
+    });
+
+    orderedStackItems.forEach((item) => {
+      if (item.type === "iris") {
+        const irisPayload = createPayload(
+          project,
+          "iris_disk",
+          item,
+          undefined,
+          slidingCarrierOverrides,
+          cascadeSizing,
+          guidePinOverrides
+        );
+        if (irisPayload.type === "iris_disk") {
+          pushSmallPart(`Iris disk: ${item.name}`, irisPayload, item.name);
+        }
+      }
+      if (item.type === "diffusion") {
+        const diffusionPayload = createPayload(
+          project,
+          "diffusion_holder",
+          item,
+          undefined,
+          slidingCarrierOverrides,
+          cascadeSizing,
+          guidePinOverrides
+        );
+        if (diffusionPayload.type === "diffusion_holder") {
+          pushSmallPart(`Diffusion holder: ${item.name}`, diffusionPayload, item.name);
+        }
+      }
+    });
+
+    const guidePinPayload = createPayload(
+      project,
+      "guide_pin",
+      undefined,
+      undefined,
+      slidingCarrierOverrides,
+      cascadeSizing,
+      guidePinOverrides
+    );
+    if (guidePinPayload.type === "guide_pin") {
+      pushSmallPart("Guide pins for sliding carrier", guidePinPayload);
+    }
+
+    const slidingCarrierPayload = createPayload(
+      project,
+      "sliding_optical_carrier",
+      cascadeSizing.sourceGlass,
+      undefined,
+      slidingCarrierOverrides,
+      cascadeSizing,
+      guidePinOverrides
+    );
+    const fixedBarrelPayload = createPayload(
+      project,
+      "fixed_pl_barrel_with_slots",
+      undefined,
+      {
+        barrelAttachZMm: fixedPlBarrelAttachZMm,
+        plOverlapMm: fixedPlOverlapMm
+      },
+      slidingCarrierOverrides,
+      cascadeSizing,
+      guidePinOverrides
+    );
+
+    if (slidingCarrierPayload.type !== "sliding_optical_carrier") {
+      pushError("Failed to generate sliding optical carrier payload.");
+    } else if (
+      toPositive(slidingCarrierPayload.params.lengthMm) <= 0 ||
+      toPositive(slidingCarrierPayload.params.outerDiameterMm) <= toPositive(slidingCarrierPayload.params.innerDiameterMm)
+    ) {
+      pushError("Sliding optical carrier geometry is invalid (check ID/OD/length).");
+    }
+
+    if (fixedBarrelPayload.type !== "fixed_pl_barrel_with_slots") {
+      pushError("Failed to generate fixed PL barrel payload.");
+    } else if (
+      toPositive(fixedBarrelPayload.params.mainBarrelLengthMm) <= 0 ||
+      toPositive(fixedBarrelPayload.params.mainBarrelOuterDiameterMm) <=
+        toPositive(fixedBarrelPayload.params.mainBarrelInnerDiameterMm)
+    ) {
+      pushError("Fixed PL barrel geometry is invalid (check ID/OD/length).");
+    }
+
+    const stackSummaryLines = orderedStackItems.flatMap((item, index) => {
+      if (item.type === "glass") {
+        return [
+          `${index + 1}. ${item.name} — glass Ø${pretty(item.diameterMm)}mm × ${pretty(item.thicknessMm)}mm`
+        ];
+      }
+      if (item.type === "spacer") {
+        const desired = getSpacerDesiredOpticalAirGapMm(item);
+        const printed = getSpacerPrintedThicknessMm(item);
+        const layouts = calculateAirspaceInsertLayouts(desired, item.insertedItems, {
+          targetStackOuterDiameterMm: cascadeSizing.targetStackOuterDiameterMm,
+          nearbyClearApertureMm: getNearbyAperture(orderedStackItems, index)
+        });
+        if (!layouts.length) {
+          return [
+            `${index + 1}. ${item.name} — desired airspace ${pretty(desired)}mm, printed spacer ${pretty(printed)}mm`
+          ];
+        }
+        const base = `${index + 1}. ${item.name} — desired airspace ${pretty(desired)}mm`;
+        const inserts = layouts.map((layout) =>
+          `   - Insert ${layout.item.type} (${layout.item.label}) ${pretty(layout.item.thicknessMm)}mm, spacer before ${pretty(layout.spacerBeforeMm)}mm, spacer after ${pretty(layout.spacerAfterMm)}mm`
+        );
+        return [base, ...inserts];
+      }
+      if (item.type === "iris") {
+        return [`${index + 1}. ${item.name} — standalone iris ${pretty(item.thicknessMm)}mm`];
+      }
+      if (item.type === "diffusion") {
+        return [`${index + 1}. ${item.name} — standalone diffusion ${pretty(item.thicknessMm)}mm`];
+      }
+      return [`${index + 1}. ${item.name} — ${item.type}`];
+    });
+
+    const smallPartsScad = buildSmallPartsPlateScad(smallParts);
+    const slidingCarrierScad =
+      slidingCarrierPayload.type === "sliding_optical_carrier"
+        ? generateScad(slidingCarrierPayload)
+        : "// Sliding optical carrier generation failed.";
+    const fixedPlBarrelScad =
+      fixedBarrelPayload.type === "fixed_pl_barrel_with_slots"
+        ? generateFixedPlBarrelWithSlotsPushPullV4Scad(fixedBarrelPayload.params)
+        : "// Fixed PL barrel generation failed.";
+
+    const dedupWarnings = [...new Set(warnings)];
+    const dedupErrors = [...new Set(errors)];
+    const builtAtIso = new Date().toISOString();
+    const summaryText = `Timo Sasaki Lens Lab Prototype Package
+
+Project: ${project.name}
+Generated: ${builtAtIso}
+
+Auto-fit System:
+- largest_glass_diameter: ${pretty(cascadeSizing.sourceGlassMaxDiameterMm)} mm
+- target_stack_outer_diameter: ${pretty(cascadeSizing.targetStackOuterDiameterMm)} mm
+- optical_stack_length: ${pretty(cascadeSizing.opticalStackLengthMm)} mm
+- carrier_inner_diameter: ${pretty(cascadeSizing.carrierInnerDiameterMm)} mm
+- carrier_outer_diameter: ${pretty(cascadeSizing.carrierOuterDiameterMm)} mm
+- fixed_barrel_inner_diameter: ${pretty(cascadeSizing.fixedBarrelInnerDiameterMm)} mm
+- fixed_barrel_outer_diameter: ${pretty(cascadeSizing.fixedBarrelOuterDiameterMm)} mm
+- fixed_barrel_length: ${pretty(cascadeSizing.mainBarrelLengthMm)} mm
+- slot_length: ${pretty(cascadeSizing.slotLengthMm)} mm
+- recommended_focus_travel: ${focusDerived.recommendedPrototypeTravelMm ? `${pretty(focusDerived.recommendedPrototypeTravelMm)} mm` : "not available"}
+- recommended_slot_length: ${focusDerived.recommendedSlotLengthMm ? `${pretty(focusDerived.recommendedSlotLengthMm)} mm` : "not available"}
+
+Stack Order (front -> sensor):
+${stackSummaryLines.join("\n")}
+
+Generated files:
+- all_small_parts_plate.scad
+- sliding_optical_carrier.scad
+- fixed_pl_barrel.scad
+- prototype_summary.txt
+
+Generated parts on small parts plate:
+${generatedPartLabels.map((label) => `- ${label}`).join("\n")}
+
+Print notes:
+- Small parts plate: print flat as generated, supports off.
+- Sliding optical carrier: print upright, supports off, clean pin holes after print.
+- Fixed PL barrel: print PL/flange side on bed if possible, supports off, inspect slot edges.
+- Guide pins: print flat as generated, then test-fit through slot and carrier hole.
+
+Warnings:
+${dedupWarnings.length ? dedupWarnings.map((line) => `- ${line}`).join("\n") : "- none"}
+
+Blocking errors:
+${dedupErrors.length ? dedupErrors.map((line) => `- ${line}`).join("\n") : "- none"}
+`;
+
+    setBuiltAllPartsPackage({
+      builtAtIso,
+      smallPartsScad,
+      slidingCarrierScad,
+      fixedPlBarrelScad,
+      summaryText,
+      generatedPartLabels,
+      warnings: dedupWarnings,
+      errors: dedupErrors
+    });
+  };
   const autoFitSystemSpecs = useMemo(() => {
     return {
       largest_glass_diameter: `${pretty(cascadeSizing.sourceGlassMaxDiameterMm)} mm`,
@@ -2225,6 +2837,31 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     const filename = `${filenameCore}.${extension}`;
     downloadTextFile(filename, code);
   };
+  const packageBaseFileName = getPackageBaseFileName(project.name);
+  const packageFileNames = {
+    smallParts: `${packageBaseFileName}_all_small_parts_plate.scad`,
+    carrier: `${packageBaseFileName}_sliding_optical_carrier.scad`,
+    fixedBarrel: `${packageBaseFileName}_fixed_pl_barrel.scad`,
+    summary: `${packageBaseFileName}_prototype_summary.txt`
+  };
+  const packageReadyForScadDownloads =
+    Boolean(builtAllPartsPackage) && (builtAllPartsPackage?.errors.length ?? 0) === 0;
+  const downloadAllPartsPackageFile = (kind: "smallParts" | "carrier" | "fixedBarrel" | "summary") => {
+    if (!builtAllPartsPackage) return;
+    if (kind === "smallParts") {
+      downloadTextFile(packageFileNames.smallParts, builtAllPartsPackage.smallPartsScad);
+      return;
+    }
+    if (kind === "carrier") {
+      downloadTextFile(packageFileNames.carrier, builtAllPartsPackage.slidingCarrierScad);
+      return;
+    }
+    if (kind === "fixedBarrel") {
+      downloadTextFile(packageFileNames.fixedBarrel, builtAllPartsPackage.fixedPlBarrelScad);
+      return;
+    }
+    downloadTextFile(packageFileNames.summary, builtAllPartsPackage.summaryText);
+  };
 
   return (
     <div className="space-y-4">
@@ -2412,6 +3049,68 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
           </p>
         </div>
       )}
+
+      <div className="panel space-y-3 p-4">
+        <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">
+          Build All Parts Package
+        </h3>
+        <p className="text-sm text-labMuted">
+          Builds a complete prototype CAD package from the current stack. Small parts are placed together on one
+          OpenSCAD print plate. Carrier and fixed PL barrel are exported separately for easier orientation and print
+          settings.
+        </p>
+        <Button type="button" variant="primary" className="w-full md:w-auto" onClick={buildAllPartsPackage}>
+          Build All Parts Package
+        </Button>
+        {builtAllPartsPackage && (
+          <div className="space-y-3 rounded-xl border border-labBorder bg-[#0b0b0b] p-3">
+            <p className="text-xs text-labMuted">
+              Last built: <span className="mono text-labText">{builtAllPartsPackage.builtAtIso}</span>
+            </p>
+            {(builtAllPartsPackage.errors.length ?? 0) > 0 ? (
+              <p className="text-xs text-labDanger">
+                Package has blocking geometry errors. Fix errors before downloading SCAD files.
+              </p>
+            ) : (
+              <p className="text-xs text-labMuted">
+                Package is ready. Download files below.
+              </p>
+            )}
+            <div className="grid gap-2 md:grid-cols-2">
+              <Button
+                type="button"
+                onClick={() => downloadAllPartsPackageFile("smallParts")}
+                disabled={!packageReadyForScadDownloads}
+              >
+                Download all small parts plate
+              </Button>
+              <Button
+                type="button"
+                onClick={() => downloadAllPartsPackageFile("carrier")}
+                disabled={!packageReadyForScadDownloads}
+              >
+                Download carrier
+              </Button>
+              <Button
+                type="button"
+                onClick={() => downloadAllPartsPackageFile("fixedBarrel")}
+                disabled={!packageReadyForScadDownloads}
+              >
+                Download fixed PL barrel
+              </Button>
+              <Button type="button" onClick={() => downloadAllPartsPackageFile("summary")}>
+                Download package summary
+              </Button>
+            </div>
+            <p className="text-xs text-labMuted">
+              Files: {packageFileNames.smallParts}, {packageFileNames.carrier}, {packageFileNames.fixedBarrel},{" "}
+              {packageFileNames.summary}
+            </p>
+            <WarningBox title="Package Warnings" lines={builtAllPartsPackage.warnings} />
+            <WarningBox title="Package Errors" lines={builtAllPartsPackage.errors} />
+          </div>
+        )}
+      </div>
 
       <PartSpecCard title="Auto-fit System" specs={autoFitSystemSpecs} />
       <PartSpecCard title="Part Specs" specs={specs} />
