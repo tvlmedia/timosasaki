@@ -690,8 +690,15 @@ function createPayload(
         plLockClearanceLength,
         plStepUpStart
       );
+      const plInterfaceOuterDiameter = Math.max(1, defaults.plInterfaceOuterDiameterMm ?? 54.9);
+      const connectorDiscEnabled = defaults.connectorDiscEnabled ?? true;
+      const connectorDiscThickness = Math.max(0, defaults.connectorDiscThicknessMm ?? 2.0);
+      const connectorDiscOverlapWithBarrel = Math.max(0, defaults.connectorDiscOverlapWithBarrelMm ?? 1.0);
+      const connectorDiscOuterDiameter = Math.max(plInterfaceOuterDiameter, mainBarrelOuter);
+      const connectorDiscInnerDiameter = mainBarrelInner;
+      const connectorDiscThicknessEffective = connectorDiscEnabled ? connectorDiscThickness : 0;
       const mainBarrelLength = Math.max(0.1, cascade.mainBarrelLengthMm);
-      const totalLength = Number((stepUpStart + mainBarrelLength).toFixed(3));
+      const totalLength = Number((stepUpStart + connectorDiscThicknessEffective + mainBarrelLength).toFixed(3));
       const plReferenceStlPath = derivePlStlPathFromStepPath(defaults.plStepReferencePath);
       const rawRotateX = project.cadDefaults.plImportedStlRotateXDeg ?? 0;
       const rawRotateY = project.cadDefaults.plImportedStlRotateYDeg ?? 0;
@@ -737,6 +744,12 @@ function createPayload(
           slotCutDepthMm: 9.0,
           pinDiameterMm: pinDiameter,
           pinClearanceMm: pinClearance,
+          plInterfaceOuterDiameterMm: plInterfaceOuterDiameter,
+          connectorDiscEnabled,
+          connectorDiscOuterDiameterMm: connectorDiscOuterDiameter,
+          connectorDiscInnerDiameterMm: connectorDiscInnerDiameter,
+          connectorDiscThicknessMm: connectorDiscThickness,
+          connectorDiscOverlapWithBarrelMm: connectorDiscOverlapWithBarrel,
           includePlReferenceMount: true,
           useImportedPlReferenceStl: true,
           plReferenceStlPath,
@@ -768,6 +781,13 @@ function createPayload(
       const pinHoleDiameter = Number((plPinDiameter + plPinClearance).toFixed(3));
       const pinBossDiameter = Number((pinHoleDiameter + 3).toFixed(3));
       const pinHoleZ = Number((carrierLength * 0.5).toFixed(3));
+      const sourceGlass =
+        (source?.type === "glass" ? source : undefined) ??
+        cascade.sourceGlass;
+      const opticalClearApertureMm = toPositive(sourceGlass?.clearApertureMm);
+      const retainingLipInnerDiameterMm = Number(
+        Math.max(30.0, opticalClearApertureMm > 0 ? opticalClearApertureMm + 2.0 : 30.0).toFixed(3)
+      );
       return {
         type: "sliding_optical_carrier",
         params: {
@@ -783,6 +803,12 @@ function createPayload(
           addPinBosses: false,
           pinBossDiameterMm: pinBossDiameter,
           pinBossHeightMm: 2,
+          retainingLipEnabled: true,
+          retainingLipPosition: "rear",
+          retainingLipThicknessMm: 1.2,
+          retainingLipInnerDiameterMm,
+          opticalClearApertureMm:
+            opticalClearApertureMm > 0 ? Number(opticalClearApertureMm.toFixed(3)) : undefined,
           facets: defaults.facets
         }
       };
@@ -987,6 +1013,14 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       ? "Main barrel may be too short for the axial slot travel. Increase barrel length or reduce slot length."
       : null;
   })();
+  const fixedPlConnectorDiscWarning = (() => {
+    if (payload.type !== "fixed_pl_barrel_with_slots") return null;
+    const connectorEnabled = payload.params.connectorDiscEnabled ?? true;
+    const plInterfaceOuterDiameter = payload.params.plInterfaceOuterDiameterMm ?? 54.9;
+    return !connectorEnabled && payload.params.mainBarrelOuterDiameterMm < plInterfaceOuterDiameter
+      ? "Main barrel OD is smaller than PL interface OD and may not connect to the PL mount. Enable connector disc."
+      : null;
+  })();
   const slidingCarrierValidationWarnings = (() => {
     if (payload.type !== "sliding_optical_carrier") return [] as string[];
     const fixedBarrelInnerDiameter = Math.max(
@@ -1013,6 +1047,27 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       warnings.push(
         "Carrier wall is very thin for pin holes and may break. Increase barrel ID, reduce carrier ID, or use a larger outer carrier."
       );
+    }
+    const retainingLipEnabled = payload.params.retainingLipEnabled ?? true;
+    if (retainingLipEnabled) {
+      const opticalClearApertureMm = toPositive(payload.params.opticalClearApertureMm);
+      const retainingLipThicknessMm = payload.params.retainingLipThicknessMm ?? 1.2;
+      const retainingLipInnerDiameterMm =
+        payload.params.retainingLipInnerDiameterMm ??
+        Math.max(30.0, opticalClearApertureMm > 0 ? opticalClearApertureMm + 2.0 : 30.0);
+      if (retainingLipThicknessMm < 0.8) {
+        warnings.push("Retaining lip may be too thin.");
+      }
+      if (retainingLipInnerDiameterMm >= payload.params.innerDiameterMm) {
+        warnings.push("Retaining lip inner diameter is too large; no retaining lip remains.");
+      }
+      if (opticalClearApertureMm > 0 && retainingLipInnerDiameterMm <= opticalClearApertureMm) {
+        warnings.push("Retaining lip inner diameter should be larger than optical clear aperture.");
+      }
+      const vignettingThresholdMm = opticalClearApertureMm > 0 ? opticalClearApertureMm + 1.0 : 24.0;
+      if (retainingLipInnerDiameterMm < vignettingThresholdMm) {
+        warnings.push("Retaining lip may vignette the optical path.");
+      }
     }
     return warnings;
   })();
@@ -1055,7 +1110,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
         ]
       : []),
     ...(fixedPlClearanceValidationWarning ? [fixedPlClearanceValidationWarning] : []),
-    ...(fixedPlMainBarrelLengthWarning ? [fixedPlMainBarrelLengthWarning] : [])
+    ...(fixedPlMainBarrelLengthWarning ? [fixedPlMainBarrelLengthWarning] : []),
+    ...(fixedPlConnectorDiscWarning ? [fixedPlConnectorDiscWarning] : [])
   ];
   const partWarnings = [
     ...(sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : []),
@@ -1178,6 +1234,12 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.main_barrel_od = `${pretty(payload.params.mainBarrelOuterDiameterMm)} mm`;
       values.main_barrel_id = `${pretty(payload.params.mainBarrelInnerDiameterMm)} mm`;
       values.main_barrel_length = `${pretty(payload.params.mainBarrelLengthMm)} mm`;
+      values.pl_interface_outer_diameter = `${pretty(payload.params.plInterfaceOuterDiameterMm ?? 54.9)} mm`;
+      values.connector_disc_enabled = payload.params.connectorDiscEnabled ?? true;
+      values.connector_disc_outer_diameter = `${pretty(payload.params.connectorDiscOuterDiameterMm ?? 0)} mm`;
+      values.connector_disc_inner_diameter = `${pretty(payload.params.connectorDiscInnerDiameterMm ?? payload.params.mainBarrelInnerDiameterMm)} mm`;
+      values.connector_disc_thickness = `${pretty(payload.params.connectorDiscThicknessMm ?? 2.0)} mm`;
+      values.connector_disc_overlap_with_barrel = `${pretty(payload.params.connectorDiscOverlapWithBarrelMm ?? 1.0)} mm`;
       values.slot_count = payload.params.slotCount;
       values.slot_width = `${pretty(payload.params.slotWidthMm)} mm`;
       values.slot_length = `${pretty(payload.params.slotLengthMm)} mm`;
@@ -1210,6 +1272,16 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.pin_hole_diameter = `${pretty(payload.params.pinHoleDiameterMm)} mm`;
       values.pin_hole_z = `${pretty(payload.params.pinHoleZMm)} mm`;
       values.pin_bosses = payload.params.addPinBosses;
+      values.retaining_lip_enabled = payload.params.retainingLipEnabled ?? true;
+      values.retaining_lip_position = payload.params.retainingLipPosition ?? "rear";
+      values.retaining_lip_thickness = `${pretty(payload.params.retainingLipThicknessMm ?? 1.2)} mm`;
+      values.retaining_lip_inner_diameter = `${pretty(
+        payload.params.retainingLipInnerDiameterMm ??
+          Math.max(30.0, (toPositive(payload.params.opticalClearApertureMm) || 0) + 2.0)
+      )} mm`;
+      if (toPositive(payload.params.opticalClearApertureMm) > 0) {
+        values.optical_clear_aperture = `${pretty(toPositive(payload.params.opticalClearApertureMm))} mm`;
+      }
       return values;
     }
 

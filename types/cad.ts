@@ -48,6 +48,12 @@ export type CadDefaults = {
   plSlotStartFromMainBarrelMm?: number;
   plReferenceOverlapMm?: number;
   plFuseBarrelToReference?: boolean;
+  plInterfaceOuterDiameterMm?: number;
+  connectorDiscEnabled?: boolean;
+  connectorDiscOuterDiameterMm?: number;
+  connectorDiscInnerDiameterMm?: number;
+  connectorDiscThicknessMm?: number;
+  connectorDiscOverlapWithBarrelMm?: number;
 };
 
 export type SteppedCupProfile = {
@@ -217,6 +223,12 @@ export type FixedPLBarrelWithSlotsParams = {
   slotStartFromMainBarrelMm?: number;
   plReferenceOverlapMm?: number;
   slotCutDepthMm?: number;
+  plInterfaceOuterDiameterMm?: number;
+  connectorDiscEnabled?: boolean;
+  connectorDiscOuterDiameterMm?: number;
+  connectorDiscInnerDiameterMm?: number;
+  connectorDiscThicknessMm?: number;
+  connectorDiscOverlapWithBarrelMm?: number;
   fuseBarrelToPlReference?: boolean;
   facets: number;
 };
@@ -234,6 +246,11 @@ export type SlidingOpticalCarrierParams = {
   addPinBosses: boolean;
   pinBossDiameterMm?: number;
   pinBossHeightMm?: number;
+  retainingLipEnabled?: boolean;
+  retainingLipPosition?: "front" | "rear" | "both";
+  retainingLipThicknessMm?: number;
+  retainingLipInnerDiameterMm?: number;
+  opticalClearApertureMm?: number;
   facets: number;
 };
 
