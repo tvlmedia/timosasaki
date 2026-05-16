@@ -89,13 +89,24 @@ function getQuickSpecs(item: StackItem): string {
         .filter(Boolean)
         .join("  ·  ");
     case "spacer":
-      return [
-        `ID ${formatMm(item.innerDiameterMm)}`,
-        `OD ${formatMm(item.outerDiameterMm)}`,
-        `T ${formatMm(item.thicknessMm)}`
-      ]
-        .filter(Boolean)
-        .join("  ·  ");
+      {
+        const desiredOpticalAirGapMm =
+          typeof item.desiredOpticalAirGapMm === "number" && Number.isFinite(item.desiredOpticalAirGapMm)
+            ? item.desiredOpticalAirGapMm
+            : item.thicknessMm;
+        const printedSpacerThicknessMm =
+          typeof item.physicalSpacerThicknessMm === "number" && Number.isFinite(item.physicalSpacerThicknessMm)
+            ? item.physicalSpacerThicknessMm
+            : item.thicknessMm;
+        return [
+          `ID ${formatMm(item.innerDiameterMm)}`,
+          `OD ${formatMm(item.outerDiameterMm)}`,
+          `Air ${formatMm(desiredOpticalAirGapMm)}`,
+          `Print ${formatMm(printedSpacerThicknessMm)}`
+        ]
+          .filter(Boolean)
+          .join("  ·  ");
+      }
     case "iris":
       return [
         `Disk ${formatMm(item.diskDiameterMm)}`,

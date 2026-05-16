@@ -114,12 +114,34 @@ function getSpacerWallWidth(item: Extract<StackItem, { type: "spacer" }>): numbe
   return (toPositive(item.outerDiameterMm) - toPositive(item.innerDiameterMm)) / 2;
 }
 
+function getSpacerDesiredOpticalAirGapMm(item: Extract<StackItem, { type: "spacer" }>): number {
+  const desired = toPositive(item.desiredOpticalAirGapMm);
+  if (desired > 0) return desired;
+  const fallback = toPositive(item.thicknessMm);
+  return fallback > 0 ? fallback : 0;
+}
+
+function getSpacerPrintedThicknessMm(item: Extract<StackItem, { type: "spacer" }>): number {
+  const printed = toPositive(item.physicalSpacerThicknessMm);
+  if (printed > 0) return printed;
+  return toPositive(item.thicknessMm);
+}
+
+function getSpacerThicknessSource(
+  item: Extract<StackItem, { type: "spacer" }>
+): "same_as_airspace" | "calculated_from_cup_offsets" | "manual_override" {
+  return item.physicalSpacerThicknessSource === "calculated_from_cup_offsets" ||
+    item.physicalSpacerThicknessSource === "manual_override"
+    ? item.physicalSpacerThicknessSource
+    : "same_as_airspace";
+}
+
 export function getItemAxialLength(item: StackItem): number {
   switch (item.type) {
     case "glass":
       return toPositive(item.thicknessMm);
     case "spacer":
-      return toPositive(item.thicknessMm);
+      return getSpacerPrintedThicknessMm(item);
     case "iris":
       return toPositive(item.thicknessMm);
     case "diffusion":
@@ -178,6 +200,34 @@ export function getStackWarnings(items: StackItem[], defaults: CadDefaults): str
       if (toPositive(item.thicknessMm) === 0) {
         warnings.push(`${item.name || "Glass item"} thickness must be positive.`);
       }
+      if (item.advancedProfile?.enabled) {
+        const sections = item.advancedProfile.sections ?? [];
+        const validSections = sections.filter(
+          (section) => toPositive(section.diameterMm) > 0 && toPositive(section.lengthMm) > 0
+        );
+        if (!sections.length) {
+          warnings.push(`${item.name || "Glass item"} has advanced profile enabled but no sections.`);
+        }
+        if (sections.length && validSections.length !== sections.length) {
+          warnings.push(`${item.name || "Glass item"} advanced profile has section rows with missing diameter/length.`);
+        }
+        const sectionSum = validSections.reduce((sum, section) => sum + toPositive(section.lengthMm), 0);
+        const totalLength = toPositive(item.advancedProfile.totalLengthMm);
+        const diff = Math.abs(totalLength - sectionSum);
+        if (totalLength > 0 && sectionSum > 0) {
+          if (diff > 2) {
+            warnings.push(`${item.name || "Glass item"} advanced profile section sum differs from total length by more than 2.0mm.`);
+          } else if (diff > 1) {
+            warnings.push(`${item.name || "Glass item"} advanced profile section sum differs from total length by more than 1.0mm.`);
+          }
+        }
+        if (
+          toPositive(item.advancedProfile.maxDiameterMm) > 0 &&
+          validSections.some((section) => toPositive(section.diameterMm) > toPositive(item.advancedProfile?.maxDiameterMm))
+        ) {
+          warnings.push(`${item.name || "Glass item"} advanced profile max diameter is smaller than a section diameter.`);
+        }
+      }
       if (item.advancedProfileEnabled) {
         const segments = item.profileSegments ?? [];
         if (!segments.length) {
@@ -201,11 +251,29 @@ export function getStackWarnings(items: StackItem[], defaults: CadDefaults): str
     }
 
     if (item.type === "spacer") {
-      if (toPositive(item.thicknessMm) === 0) {
-        warnings.push(`${item.name || "Spacer / Air Gap Ring"} thickness must be positive.`);
+      const desiredOpticalAirGapMm = getSpacerDesiredOpticalAirGapMm(item);
+      const printedSpacerThicknessMm = getSpacerPrintedThicknessMm(item);
+      const thicknessSource = getSpacerThicknessSource(item);
+      if (desiredOpticalAirGapMm <= 0) {
+        warnings.push(`${item.name || "Spacer / Air Gap Ring"} desired optical air gap must be positive.`);
+      }
+      if (printedSpacerThicknessMm <= 0) {
+        warnings.push(`${item.name || "Spacer / Air Gap Ring"} printed spacer thickness must be positive.`);
       }
       if (item.outerDiameterMm <= item.innerDiameterMm) {
         warnings.push("Spacer OD must be larger than spacer ID.");
+      }
+      if (printedSpacerThicknessMm < 0) {
+        warnings.push("Printed spacer thickness is negative.");
+      }
+      if (thicknessSource === "calculated_from_cup_offsets") {
+        warnings.push("Cup offset compensation unavailable; printed spacer may still equal desired airspace.");
+      }
+      if (desiredOpticalAirGapMm > 0 && printedSpacerThicknessMm > 0) {
+        const diff = Math.abs(printedSpacerThicknessMm - desiredOpticalAirGapMm);
+        if (diff > 0.001) {
+          warnings.push("Desired optical airspace differs from printed spacer thickness.");
+        }
       }
 
       const nearbyAperture = getNearbyAperture(orderedItems, i);
@@ -269,6 +337,16 @@ export function getStackWarnings(items: StackItem[], defaults: CadDefaults): str
     }
   }
 
+  const targetStackOuterDiameterMm = getTargetStackOuterDiameterForWarnings(orderedItems, defaults);
+  const largestGlassDiameterMm = getLargestGlassDiameter(orderedItems);
+  if (
+    targetStackOuterDiameterMm > 0 &&
+    largestGlassDiameterMm > 0 &&
+    targetStackOuterDiameterMm < largestGlassDiameterMm + DEFAULT_MIN_CUP_WALL_THICKNESS_MM * 2
+  ) {
+    warnings.push("Target stack OD is too small for largest glass diameter plus minimum cup wall thickness.");
+  }
+
   if (defaults.wallThicknessMm < 1.2) {
     warnings.push("Wall thickness under 1.2mm may be fragile for FDM printing.");
   }
@@ -291,6 +369,23 @@ export function getPartWarnings(item: StackItem, defaults: CadDefaults): string[
 
   if (item.type === "spacer" && getSpacerWallWidth(item) < 1.2) {
     warnings.push("Spacer wall may be fragile for FDM printing.");
+  }
+  if (item.type === "spacer" && getSpacerDesiredOpticalAirGapMm(item) <= 0) {
+    warnings.push("Desired optical airspace must be positive.");
+  }
+  if (item.type === "spacer" && getSpacerPrintedThicknessMm(item) <= 0) {
+    warnings.push("Printed spacer thickness must be positive.");
+  }
+  if (
+    item.type === "spacer" &&
+    getSpacerDesiredOpticalAirGapMm(item) > 0 &&
+    getSpacerPrintedThicknessMm(item) > 0 &&
+    Math.abs(getSpacerDesiredOpticalAirGapMm(item) - getSpacerPrintedThicknessMm(item)) > 0.001
+  ) {
+    warnings.push("Desired optical airspace differs from printed spacer thickness.");
+  }
+  if (item.type === "spacer" && getSpacerThicknessSource(item) === "calculated_from_cup_offsets") {
+    warnings.push("Cup offset compensation not yet fully applied; verify printed spacer thickness.");
   }
   if (item.type === "spacer" && item.outerDiameterMm <= item.innerDiameterMm) {
     warnings.push("Spacer OD must be larger than spacer ID.");

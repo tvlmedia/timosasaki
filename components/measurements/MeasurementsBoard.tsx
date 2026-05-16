@@ -11,20 +11,24 @@ import { createId, safeFileName } from "@/lib/ids";
 import { downloadTextFile } from "@/lib/storage";
 import type {
   AdvancedPhysicalProfile,
+  AirspaceMeasurementType,
   CalibrationReferenceGeometry,
   CalibrationReferenceType,
   ElementOrientation,
   ElementOverallType,
   LensProject,
+  MeasurementConfidence,
   MeasurementAnnotation,
   MeasurementFields,
   MeasurementItemType,
+  PhysicalSpacerThicknessSource,
   OriginalLensBaseline,
   OpticalGroupType,
   OpticalSubElement,
   OpticalPowerGuess,
   PhysicalComponentMode,
   StepDirection,
+  ThicknessMeasurementType,
   SurfaceShape,
   StackItem
 } from "@/types";
@@ -115,6 +119,36 @@ const orientationOptions: Array<{ value: ElementOrientation; label: string }> = 
   { value: "front_side_marked", label: "Front side marked" },
   { value: "rear_side_marked", label: "Rear side marked" },
   { value: "unknown", label: "Unknown" }
+];
+
+const thicknessMeasurementTypeOptions: Array<{ value: ThicknessMeasurementType; label: string }> = [
+  { value: "edge_thickness", label: "Edge thickness" },
+  { value: "center_max_thickness", label: "Center/max thickness" },
+  { value: "straight_body_thickness", label: "Straight body thickness" },
+  { value: "mechanical_block_length", label: "Mechanical block length" },
+  { value: "estimated", label: "Estimated" },
+  { value: "unknown", label: "Unknown" }
+];
+
+const airspaceMeasurementTypeOptions: Array<{ value: AirspaceMeasurementType; label: string }> = [
+  { value: "optical_surface_to_optical_surface", label: "Optical surface to optical surface" },
+  { value: "mechanical_edge_or_seat_to_edge_or_seat", label: "Mechanical edge/seat to edge/seat" },
+  { value: "cad_face_to_cad_face", label: "CAD face to CAD face" },
+  { value: "physical_caliper_estimate", label: "Physical caliper estimate" },
+  { value: "estimated", label: "Estimated" },
+  { value: "unknown", label: "Unknown" }
+];
+
+const measurementConfidenceOptions: Array<{ value: MeasurementConfidence; label: string }> = [
+  { value: "measured", label: "Measured" },
+  { value: "estimated", label: "Estimated" },
+  { value: "unknown", label: "Unknown" }
+];
+
+const physicalSpacerThicknessSourceOptions: Array<{ value: PhysicalSpacerThicknessSource; label: string }> = [
+  { value: "same_as_airspace", label: "Same as optical airspace" },
+  { value: "calculated_from_cup_offsets", label: "Calculated from cup offsets" },
+  { value: "manual_override", label: "Manual override" }
 ];
 
 const PHOTO_UPLOAD_RESIZE_THRESHOLD_BYTES = 1_500_000;
@@ -376,6 +410,8 @@ function createGlassDefaultFields(index: number): MeasurementFields {
     rearSurfaceShape: "unknown",
     opticalPowerGuess: "unknown",
     orientation: "unknown",
+    thicknessMeasurementType: "unknown",
+    thicknessConfidence: "unknown",
     hasSteppedProfile: false,
     stepDirection: "unknown"
   };
@@ -426,14 +462,54 @@ function getAdvancedProfileSectionSum(profile: AdvancedPhysicalProfile | undefin
   return profile.sections.reduce((sum, section) => sum + toPositive(section.lengthMm), 0);
 }
 
+function getInsertedItemsTotalThickness(fields: MeasurementFields): number {
+  return (fields.insertedItems ?? []).reduce((sum, item) => {
+    const thickness = toPositive(item.thicknessMm);
+    return thickness > 0 ? sum + thickness : sum;
+  }, 0);
+}
+
+function getDesiredOpticalAirGapMm(fields: MeasurementFields): number {
+  if (toPositive(fields.desiredOpticalAirGapMm) > 0) {
+    return fields.desiredOpticalAirGapMm as number;
+  }
+  if (toPositive(fields.thicknessMm) > 0) {
+    return fields.thicknessMm as number;
+  }
+  return 0;
+}
+
+function getPhysicalSpacerThicknessMm(fields: MeasurementFields): number {
+  if (toPositive(fields.physicalSpacerThicknessMm) > 0) {
+    return fields.physicalSpacerThicknessMm as number;
+  }
+  const desired = getDesiredOpticalAirGapMm(fields);
+  return desired > 0 ? desired : 0;
+}
+
+function getPhysicalSpacerThicknessSource(fields: MeasurementFields): PhysicalSpacerThicknessSource {
+  return fields.physicalSpacerThicknessSource === "calculated_from_cup_offsets" ||
+    fields.physicalSpacerThicknessSource === "manual_override"
+    ? fields.physicalSpacerThicknessSource
+    : "same_as_airspace";
+}
+
 function getDefaultFields(type: MeasurementItemType, countOfType: number): MeasurementFields {
   if (type === "glass") return createGlassDefaultFields(countOfType);
   if (type === "spacer_ring") {
+    const desiredOpticalAirGapMm = 1;
     return {
       innerDiameterMm: 28,
       outerDiameterMm: 38,
-      thicknessMm: 1,
-      notes: "A physical ring/shim that sets the optical air gap between parts. The inner hole stays open for the light path."
+      thicknessMm: desiredOpticalAirGapMm,
+      desiredOpticalAirGapMm,
+      physicalSpacerThicknessMm: desiredOpticalAirGapMm,
+      physicalSpacerThicknessSource: "same_as_airspace",
+      airspaceMeasurementType: "unknown",
+      airspaceConfidence: "unknown",
+      insertedItems: [],
+      notes:
+        "AirSpace is the optical/layout target. Printed spacer thickness can later be compensated for cup offsets, lips, and inserted iris/filter items."
     };
   }
   if (type === "housing_barrel") {
@@ -500,6 +576,19 @@ function annotationDisplayLabel(annotation: MeasurementAnnotation): string {
 
 function annotationSummary(annotation: MeasurementAnnotation): string {
   const fields = annotation.fields;
+  if (annotation.itemType === "spacer_ring") {
+    const desired = getDesiredOpticalAirGapMm(fields);
+    const printed = getPhysicalSpacerThicknessMm(fields);
+    if (desired > 0 || printed > 0) {
+      return [
+        desired > 0 ? `optical airspace ${formatMm(desired)}mm` : "",
+        printed > 0 ? `printed spacer ${formatMm(printed)}mm` : ""
+      ]
+        .filter(Boolean)
+        .join(" · ");
+    }
+    return "";
+  }
   if (annotation.itemType !== "glass") return "";
 
   const mode = getPhysicalMode(fields);
@@ -720,6 +809,8 @@ function mapAnnotationToStackItem(
       sourceBaselineComponentId: options?.sourceBaselineComponentId,
       diameterMm: fields.diameterMm,
       thicknessMm: fields.thicknessMm,
+      thicknessMeasurementType: fields.thicknessMeasurementType ?? "unknown",
+      thicknessConfidence: fields.thicknessConfidence ?? "unknown",
       advancedProfile: advancedProfile
         ? {
             ...advancedProfile,
@@ -764,13 +855,16 @@ function mapAnnotationToStackItem(
   }
 
   if (annotation.itemType === "spacer_ring") {
+    const desiredOpticalAirGapMm = getDesiredOpticalAirGapMm(fields);
+    const physicalSpacerThicknessMm = getPhysicalSpacerThicknessMm(fields);
+    const physicalSpacerThicknessSource = getPhysicalSpacerThicknessSource(fields);
     if (
       !fields.innerDiameterMm ||
       !fields.outerDiameterMm ||
-      !fields.thicknessMm ||
+      desiredOpticalAirGapMm <= 0 ||
       fields.innerDiameterMm <= 0 ||
       fields.outerDiameterMm <= fields.innerDiameterMm ||
-      fields.thicknessMm <= 0
+      physicalSpacerThicknessMm <= 0
     ) {
       return null;
     }
@@ -785,7 +879,14 @@ function mapAnnotationToStackItem(
       sourceBaselineComponentId: options?.sourceBaselineComponentId,
       innerDiameterMm: fields.innerDiameterMm,
       outerDiameterMm: fields.outerDiameterMm,
-      thicknessMm: fields.thicknessMm,
+      thicknessMm: physicalSpacerThicknessMm,
+      desiredOpticalAirGapMm,
+      physicalSpacerThicknessMm,
+      physicalSpacerThicknessSource,
+      airspaceMeasurementType: fields.airspaceMeasurementType ?? "unknown",
+      airspaceConfidence: fields.airspaceConfidence ?? "unknown",
+      insertedItems: fields.insertedItems ?? [],
+      insertedItemsTotalThicknessMm: getInsertedItemsTotalThickness(fields),
       autoFitToBarrel: false,
       hasAntiReflectionGrooves: false,
       chamferEnabled: false,
@@ -881,12 +982,52 @@ function syncLinkedStackItemFromAnnotation(
 
   return normalized.map((item, index) =>
     index === targetIndex
-      ? {
-          ...mapped,
-          id: existing.id,
-          locked: existing.locked,
-          positionIndex: existing.positionIndex
-        }
+      ? (() => {
+          const merged =
+            mapped.type === "glass" && existing.type === "glass"
+              ? {
+                  ...existing,
+                  ...mapped,
+                  notes: mapped.notes !== undefined ? mapped.notes : existing.notes,
+                  advancedProfile: mapped.advancedProfile ?? existing.advancedProfile,
+                  profileSegments: mapped.profileSegments ?? existing.profileSegments,
+                  thicknessMeasurementType: mapped.thicknessMeasurementType ?? existing.thicknessMeasurementType,
+                  thicknessConfidence: mapped.thicknessConfidence ?? existing.thicknessConfidence
+                }
+              : mapped.type === "spacer" && existing.type === "spacer"
+                ? {
+                    ...existing,
+                    ...mapped,
+                    notes: mapped.notes !== undefined ? mapped.notes : existing.notes,
+                    desiredOpticalAirGapMm:
+                      mapped.desiredOpticalAirGapMm ?? existing.desiredOpticalAirGapMm ?? existing.thicknessMm,
+                    physicalSpacerThicknessMm:
+                      mapped.physicalSpacerThicknessMm ??
+                      existing.physicalSpacerThicknessMm ??
+                      existing.thicknessMm,
+                    physicalSpacerThicknessSource:
+                      mapped.physicalSpacerThicknessSource ??
+                      existing.physicalSpacerThicknessSource ??
+                      "same_as_airspace",
+                    airspaceMeasurementType: mapped.airspaceMeasurementType ?? existing.airspaceMeasurementType,
+                    airspaceConfidence: mapped.airspaceConfidence ?? existing.airspaceConfidence,
+                    insertedItems: mapped.insertedItems ?? existing.insertedItems,
+                    insertedItemsTotalThicknessMm:
+                      mapped.insertedItemsTotalThicknessMm ?? existing.insertedItemsTotalThicknessMm
+                  }
+                : {
+                    ...existing,
+                    ...mapped,
+                    notes: mapped.notes !== undefined ? mapped.notes : existing.notes
+                  };
+
+          return {
+            ...merged,
+            id: existing.id,
+            locked: existing.locked,
+            positionIndex: existing.positionIndex
+          } as StackItem;
+        })()
       : item
   );
 }
@@ -952,7 +1093,7 @@ function createQuickBaselineFromMeasurements(project: LensProject): OriginalLens
   const airGaps: OriginalLensBaseline["airGaps"] = spacerAnnotations.map((annotation, index) => ({
     id: createId("baseline_gap"),
     label: annotation.label || `Spacer / Air Gap Ring ${index + 1}`,
-    thicknessMm: Math.max(0, annotation.fields.thicknessMm ?? 1),
+    thicknessMm: Math.max(0, getDesiredOpticalAirGapMm(annotation.fields) || 1),
     innerDiameterMm: Math.max(0, annotation.fields.innerDiameterMm ?? 20),
     outerDiameterMm: Math.max(0, annotation.fields.outerDiameterMm ?? 38),
     notes: annotation.fields.notes?.trim() || undefined
@@ -1067,6 +1208,30 @@ export function MeasurementsBoard({
   const selectedAdvancedMissingSectionValues = Boolean(selectedAdvancedProfile?.enabled) && selectedAdvancedSections.some(
     (section) => toPositive(section.diameterMm) <= 0 || toPositive(section.lengthMm) <= 0
   );
+  const selectedAdvancedMaxSectionDiameter = selectedAdvancedSections.reduce(
+    (max, section) => Math.max(max, toPositive(section.diameterMm)),
+    0
+  );
+  const selectedAdvancedSectionDiameterExceedsMax =
+    Boolean(selectedAdvancedProfile?.enabled) &&
+    toPositive(selectedAdvancedProfile?.maxDiameterMm) > 0 &&
+    selectedAdvancedSections.some((section) => toPositive(section.diameterMm) > toPositive(selectedAdvancedProfile?.maxDiameterMm));
+  const selectedAdvancedCanSuggestMaxDiameter =
+    Boolean(selectedAdvancedProfile?.enabled) &&
+    toPositive(selectedAdvancedProfile?.maxDiameterMm) <= 0 &&
+    selectedAdvancedMaxSectionDiameter > 0;
+  const selectedAdvancedCanSuggestTotalLength =
+    Boolean(selectedAdvancedProfile?.enabled) &&
+    toPositive(selectedAdvancedProfile?.totalLengthMm) <= 0 &&
+    selectedAdvancedSectionSum > 0;
+  const selectedSpacerDesiredAirGapMm =
+    selectedAnnotation?.itemType === "spacer_ring" ? getDesiredOpticalAirGapMm(selectedAnnotation.fields) : 0;
+  const selectedSpacerPrintedThicknessMm =
+    selectedAnnotation?.itemType === "spacer_ring" ? getPhysicalSpacerThicknessMm(selectedAnnotation.fields) : 0;
+  const selectedSpacerThicknessSource =
+    selectedAnnotation?.itemType === "spacer_ring"
+      ? getPhysicalSpacerThicknessSource(selectedAnnotation.fields)
+      : "same_as_airspace";
 
   useEffect(() => {
     if (!selectedAnnotationId && annotations[0]) {
@@ -1554,12 +1719,53 @@ export function MeasurementsBoard({
       const existing = currentItems[targetIndex];
       nextItems = currentItems.map((item, index) =>
         index === targetIndex
-          ? {
-              ...mapped,
-              id: existing.id,
-              locked: existing.locked,
-              positionIndex: existing.positionIndex
-            }
+          ? (() => {
+              const merged =
+                mapped.type === "glass" && existing.type === "glass"
+                  ? {
+                      ...existing,
+                      ...mapped,
+                      notes: mapped.notes !== undefined ? mapped.notes : existing.notes,
+                      advancedProfile: mapped.advancedProfile ?? existing.advancedProfile,
+                      profileSegments: mapped.profileSegments ?? existing.profileSegments,
+                      thicknessMeasurementType: mapped.thicknessMeasurementType ?? existing.thicknessMeasurementType,
+                      thicknessConfidence: mapped.thicknessConfidence ?? existing.thicknessConfidence
+                    }
+                  : mapped.type === "spacer" && existing.type === "spacer"
+                    ? {
+                        ...existing,
+                        ...mapped,
+                        notes: mapped.notes !== undefined ? mapped.notes : existing.notes,
+                        desiredOpticalAirGapMm:
+                          mapped.desiredOpticalAirGapMm ??
+                          existing.desiredOpticalAirGapMm ??
+                          existing.thicknessMm,
+                        physicalSpacerThicknessMm:
+                          mapped.physicalSpacerThicknessMm ??
+                          existing.physicalSpacerThicknessMm ??
+                          existing.thicknessMm,
+                        physicalSpacerThicknessSource:
+                          mapped.physicalSpacerThicknessSource ??
+                          existing.physicalSpacerThicknessSource ??
+                          "same_as_airspace",
+                        airspaceMeasurementType: mapped.airspaceMeasurementType ?? existing.airspaceMeasurementType,
+                        airspaceConfidence: mapped.airspaceConfidence ?? existing.airspaceConfidence,
+                        insertedItems: mapped.insertedItems ?? existing.insertedItems,
+                        insertedItemsTotalThicknessMm:
+                          mapped.insertedItemsTotalThicknessMm ?? existing.insertedItemsTotalThicknessMm
+                      }
+                    : {
+                        ...existing,
+                        ...mapped,
+                        notes: mapped.notes !== undefined ? mapped.notes : existing.notes
+                      };
+              return {
+                ...merged,
+                id: existing.id,
+                locked: existing.locked,
+                positionIndex: existing.positionIndex
+              } as StackItem;
+            })()
           : item
       );
       finalLinkedId = existing.id;
@@ -2338,6 +2544,35 @@ export function MeasurementsBoard({
                             updateSelectedField("edgeThicknessMm", parseOptionalNumber(event.target.value))
                           }
                         />
+                        <Select
+                          label="Thickness measurement type"
+                          value={selectedAnnotation.fields.thicknessMeasurementType ?? "unknown"}
+                          onChange={(event) =>
+                            updateSelectedField(
+                              "thicknessMeasurementType",
+                              event.target.value as ThicknessMeasurementType
+                            )
+                          }
+                        >
+                          {thicknessMeasurementTypeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                        <Select
+                          label="Thickness confidence"
+                          value={selectedAnnotation.fields.thicknessConfidence ?? "unknown"}
+                          onChange={(event) =>
+                            updateSelectedField("thicknessConfidence", event.target.value as MeasurementConfidence)
+                          }
+                        >
+                          {measurementConfidenceOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
                         <NumberInput
                           label="Clear aperture / usable optical diameter (mm)"
                           value={selectedAnnotation.fields.clearApertureMm ?? ""}
@@ -2346,6 +2581,10 @@ export function MeasurementsBoard({
                             updateSelectedField("clearApertureMm", parseOptionalNumber(event.target.value))
                           }
                         />
+                        <p className="text-xs text-labMuted">
+                          Thickness can be edge thickness, center/max thickness, straight body thickness, or an
+                          estimate. AirSpaces should be used as the primary truth for optical positioning.
+                        </p>
                         <p className="text-xs text-labMuted">
                           Optional. Leave empty if unknown. This is the usable optical diameter, not the physical
                           glass diameter. Used for vignetting and retaining-lip warnings.
@@ -2443,6 +2682,35 @@ export function MeasurementsBoard({
                           min={0}
                           onChange={(event) => updateSelectedField("thicknessMm", parseOptionalNumber(event.target.value))}
                         />
+                        <Select
+                          label="Thickness measurement type"
+                          value={selectedAnnotation.fields.thicknessMeasurementType ?? "unknown"}
+                          onChange={(event) =>
+                            updateSelectedField(
+                              "thicknessMeasurementType",
+                              event.target.value as ThicknessMeasurementType
+                            )
+                          }
+                        >
+                          {thicknessMeasurementTypeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                        <Select
+                          label="Thickness confidence"
+                          value={selectedAnnotation.fields.thicknessConfidence ?? "unknown"}
+                          onChange={(event) =>
+                            updateSelectedField("thicknessConfidence", event.target.value as MeasurementConfidence)
+                          }
+                        >
+                          {measurementConfidenceOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
                         <NumberInput
                           label="Clear aperture / usable optical diameter (mm)"
                           value={selectedAnnotation.fields.clearApertureMm ?? ""}
@@ -2451,6 +2719,10 @@ export function MeasurementsBoard({
                             updateSelectedField("clearApertureMm", parseOptionalNumber(event.target.value))
                           }
                         />
+                        <p className="text-xs text-labMuted">
+                          Thickness can be edge thickness, center/max thickness, straight body thickness, or an
+                          estimate. AirSpaces should be used as the primary truth for optical positioning.
+                        </p>
                         <p className="text-xs text-labMuted">
                           Optional. Leave empty if unknown. This is the usable optical diameter, not the physical
                           glass diameter. Used for vignetting and retaining-lip warnings.
@@ -2714,6 +2986,11 @@ export function MeasurementsBoard({
                       />
                       Enable advanced profile
                     </label>
+                    <p className="text-xs leading-relaxed text-labMuted">
+                      Advanced profile describes the measured physical shape of this optical block in FRONT → SENSOR
+                      order. CAD cup generation will choose insertion side / insertion-safe bore separately. Do not
+                      flip this measured profile just to make insertion possible.
+                    </p>
 
                     {selectedAdvancedProfile?.enabled && (
                       <div className="space-y-3 rounded-xl border border-labBorder bg-[#0b0b0b] p-3">
@@ -2753,6 +3030,39 @@ export function MeasurementsBoard({
                             }))
                           }
                         />
+
+                        {(selectedAdvancedCanSuggestTotalLength || selectedAdvancedCanSuggestMaxDiameter) && (
+                          <div className="flex flex-wrap gap-2">
+                            {selectedAdvancedCanSuggestTotalLength && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                onClick={() =>
+                                  updateSelectedAdvancedProfile((profile) => ({
+                                    ...profile,
+                                    totalLengthMm: Number(selectedAdvancedSectionSum.toFixed(2))
+                                  }))
+                                }
+                              >
+                                Use section sum for total length
+                              </Button>
+                            )}
+                            {selectedAdvancedCanSuggestMaxDiameter && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                onClick={() =>
+                                  updateSelectedAdvancedProfile((profile) => ({
+                                    ...profile,
+                                    maxDiameterMm: Number(selectedAdvancedMaxSectionDiameter.toFixed(2))
+                                  }))
+                                }
+                              >
+                                Use max section diameter
+                              </Button>
+                            )}
+                          </div>
+                        )}
 
                         <div className="space-y-2">
                           {selectedAdvancedSections.map((section) => (
@@ -2883,6 +3193,11 @@ export function MeasurementsBoard({
                               Warning: at least one section is missing diameter or length.
                             </p>
                           )}
+                          {selectedAdvancedSectionDiameterExceedsMax && (
+                            <p className="mt-2 text-labDanger">
+                              Warning: at least one section diameter is larger than max diameter.
+                            </p>
+                          )}
                         </div>
                       </div>
                     )}
@@ -2908,14 +3223,125 @@ export function MeasurementsBoard({
                       }
                     />
                     <NumberInput
-                      label="Thickness (mm)"
-                      value={selectedAnnotation.fields.thicknessMm ?? ""}
+                      label="Desired optical airspace mm"
+                      value={selectedSpacerDesiredAirGapMm > 0 ? selectedSpacerDesiredAirGapMm : ""}
                       min={0}
-                      onChange={(event) => updateSelectedField("thicknessMm", parseOptionalNumber(event.target.value))}
+                      onChange={(event) => {
+                        const desired = parseOptionalNumber(event.target.value);
+                        updateSelectedAnnotation((annotation) => {
+                          const source = getPhysicalSpacerThicknessSource(annotation.fields);
+                          const desiredValue = desired ?? 0;
+                          const shouldTrackDesired = source !== "manual_override";
+                          return {
+                            ...annotation,
+                            fields: {
+                              ...annotation.fields,
+                              thicknessMm: desiredValue,
+                              desiredOpticalAirGapMm: desiredValue,
+                              physicalSpacerThicknessMm: shouldTrackDesired
+                                ? desiredValue
+                                : annotation.fields.physicalSpacerThicknessMm
+                            }
+                          };
+                        });
+                      }}
                     />
+                    <Select
+                      label="Airspace measurement type"
+                      value={selectedAnnotation.fields.airspaceMeasurementType ?? "unknown"}
+                      onChange={(event) =>
+                        updateSelectedField(
+                          "airspaceMeasurementType",
+                          event.target.value as AirspaceMeasurementType
+                        )
+                      }
+                    >
+                      {airspaceMeasurementTypeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </Select>
+                    <Select
+                      label="Airspace confidence"
+                      value={selectedAnnotation.fields.airspaceConfidence ?? "unknown"}
+                      onChange={(event) =>
+                        updateSelectedField("airspaceConfidence", event.target.value as MeasurementConfidence)
+                      }
+                    >
+                      {measurementConfidenceOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </Select>
+                    <NumberInput
+                      label="Printed spacer thickness mm"
+                      value={selectedSpacerPrintedThicknessMm > 0 ? selectedSpacerPrintedThicknessMm : ""}
+                      min={0}
+                      onChange={(event) =>
+                        updateSelectedAnnotation((annotation) => ({
+                          ...annotation,
+                          fields: {
+                            ...annotation.fields,
+                            physicalSpacerThicknessMm: parseOptionalNumber(event.target.value),
+                            physicalSpacerThicknessSource: "manual_override"
+                          }
+                        }))
+                      }
+                    />
+                    <Select
+                      label="Source of printed spacer thickness"
+                      value={selectedSpacerThicknessSource}
+                      onChange={(event) =>
+                        updateSelectedAnnotation((annotation) => {
+                          const desired = getDesiredOpticalAirGapMm(annotation.fields);
+                          const nextSource = event.target.value as PhysicalSpacerThicknessSource;
+                          const nextPhysical =
+                            nextSource === "manual_override"
+                              ? annotation.fields.physicalSpacerThicknessMm ?? desired
+                              : desired;
+                          return {
+                            ...annotation,
+                            fields: {
+                              ...annotation.fields,
+                              physicalSpacerThicknessSource: nextSource,
+                              physicalSpacerThicknessMm: nextPhysical
+                            }
+                          };
+                        })
+                      }
+                    >
+                      {physicalSpacerThicknessSourceOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </Select>
                     <p className="rounded-lg border border-labBorder bg-[#0b0b0b] px-3 py-2 text-xs leading-relaxed text-labMuted">
-                      A physical ring/shim that sets the optical air gap between parts. The inner hole stays open for
-                      the light path.
+                      AirSpace describes the desired optical/layout distance between adjacent elements. Physical
+                      printed spacer thickness may be adjusted for cup lips, offsets, iris/filter inserts, and
+                      retaining features.
+                    </p>
+                    {selectedSpacerThicknessSource === "same_as_airspace" && (
+                      <p className="rounded-lg border border-labBorder bg-[#0b0b0b] px-3 py-2 text-xs leading-relaxed text-labMuted">
+                        Printed spacer currently equals measured airspace. Cup offset compensation not applied.
+                      </p>
+                    )}
+                    {selectedSpacerThicknessSource === "calculated_from_cup_offsets" && (
+                      <p className="rounded-lg border border-labBorder bg-[#0b0b0b] px-3 py-2 text-xs leading-relaxed text-labMuted">
+                        Cup offset compensation will calculate printed spacer thickness from desired optical airspace
+                        once cup offsets and inserted items are fully resolved.
+                      </p>
+                    )}
+                    {selectedSpacerThicknessSource === "manual_override" && (
+                      <p className="rounded-lg border border-labBorder bg-[#0b0b0b] px-3 py-2 text-xs leading-relaxed text-labMuted">
+                        Manual override is active. Both desired optical airspace and printed spacer thickness are kept.
+                      </p>
+                    )}
+                    <p className="text-xs leading-relaxed text-labMuted">
+                      AirSpace can later include inserted items (iris/filter/diffusion/custom) without changing the
+                      desired optical spacing target.
                     </p>
                   </>
                 )}

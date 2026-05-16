@@ -38,6 +38,16 @@ function getAdvancedSections(params: ElementCupParams): AdvancedProfileSection[]
     .filter((section) => toPositive(section.diameterMm) > 0 && toPositive(section.lengthMm) > 0);
 }
 
+function resolveInsertionSide(params: ElementCupParams): "front" | "rear" {
+  if (params.resolvedCupInsertionSide === "front" || params.resolvedCupInsertionSide === "rear") {
+    return params.resolvedCupInsertionSide;
+  }
+  if (params.cupInsertionSide === "front" || params.cupInsertionSide === "rear") {
+    return params.cupInsertionSide;
+  }
+  return "front";
+}
+
 function hasCompleteAdvancedProfile(params: ElementCupParams): boolean {
   if (!params.advancedProfile?.enabled) return false;
   if (toPositive(params.advancedProfile.maxDiameterMm) <= 0) return false;
@@ -49,12 +59,14 @@ function hasCompleteAdvancedProfile(params: ElementCupParams): boolean {
 
 function buildInsertionSafeBoreSections(
   sections: AdvancedProfileSection[],
-  maxDiameterMm: number
+  maxDiameterMm: number,
+  insertionSide: "front" | "rear"
 ): { sections: BoreSection[]; maxSectionIndex: number; sectionSumMm: number } {
+  const insertionOrderedSections = insertionSide === "rear" ? sections.slice().reverse() : sections;
   let maxSectionIndex = 0;
   let smallestDelta = Number.POSITIVE_INFINITY;
 
-  sections.forEach((section, index) => {
+  insertionOrderedSections.forEach((section, index) => {
     const delta = Math.abs(section.diameterMm - maxDiameterMm);
     if (delta < smallestDelta) {
       smallestDelta = delta;
@@ -64,7 +76,7 @@ function buildInsertionSafeBoreSections(
 
   const merged: BoreSection[] = [];
   let z = 0;
-  sections.forEach((section, index) => {
+  insertionOrderedSections.forEach((section, index) => {
     const boreMeasuredDiameter = index <= maxSectionIndex ? maxDiameterMm : section.diameterMm;
     const boreLength = section.lengthMm;
     const previous = merged[merged.length - 1];
@@ -93,18 +105,20 @@ function buildInsertionSafeBoreSections(
 function generateAdvancedProfileScad(params: ElementCupParams): string {
   const advanced = params.advancedProfile!;
   const sections = getAdvancedSections(params);
+  const insertionSide = resolveInsertionSide(params);
   const maxDiameterMm = toPositive(advanced.maxDiameterMm);
   const seatClearanceMm = params.seatClearanceMm;
   const wallThicknessMm = params.wallThicknessMm;
   const rearLipMm = params.rearLipMm;
-  const sectionData = buildInsertionSafeBoreSections(sections, maxDiameterMm);
+  const sectionData = buildInsertionSafeBoreSections(sections, maxDiameterMm, insertionSide);
   const sectionSumMm = sectionData.sectionSumMm;
   const lengthDifferenceMm = advanced.totalLengthMm - sectionSumMm;
   const extraDepthMm = Math.max((params.cupDepthMm ?? sectionSumMm + rearLipMm + 0.5) - (sectionSumMm + rearLipMm), 0);
   const cupDepthMm = sectionSumMm + rearLipMm + extraDepthMm;
   const outerDiameterMm = params.outerDiameterMm ?? maxDiameterMm + seatClearanceMm + wallThicknessMm * 2;
 
-  const lastMeasuredDiameter = sections[sections.length - 1]?.diameterMm ?? maxDiameterMm;
+  const lastMeasuredDiameter =
+    sectionData.sections[sectionData.sections.length - 1]?.measuredDiameterMm ?? maxDiameterMm;
   const defaultRearClearHoleMm = Math.max(lastMeasuredDiameter - 2, 0.4);
   const requestedRearClearHoleMm = Math.max(advanced.rearClearHoleMm ?? defaultRearClearHoleMm, 0.4);
   const lastBoreDiameterMm =
@@ -143,8 +157,8 @@ bore${index + 1}_l = ${n(section.lengthMm)};`
     .join("\n");
 
   return `${scadHeader(params.partName, params.facets)}// Timo Sasaki Lens Lab - insertion-safe stepped lens cup
-// Z=0 = front / insertion side
-// Positive Z = toward rear / sensor side
+// Advanced profile remains FRONT -> SENSOR (optical order).
+// Z=0 is insertion side for generated mechanics.
 // Bore before and through max diameter section uses max diameter so the lens block can physically slide into the cup.
 
 show_cutaway = false;
@@ -152,6 +166,10 @@ show_cutaway = false;
 total_length = ${n(advanced.totalLengthMm)};
 max_diameter = ${n(maxDiameterMm)};
 max_diameter_starts_at = ${n(advanced.maxDiameterPositionFromFrontMm)};
+cup_insertion_side = "${insertionSide}";
+cup_retaining_side = "${params.resolvedCupRetainingSide ?? params.cupRetainingSide ?? "auto"}";
+cup_front_offset_mm = ${n(params.cupFrontOffsetMm ?? 0)};
+cup_rear_offset_mm = ${n(params.cupRearOffsetMm ?? 0)};
 
 ${sectionVars}
 
@@ -215,6 +233,10 @@ echo("Length difference = ", length_difference);
 echo("Max diameter = ", max_d);
 echo("Outer diameter = ", outer_diameter);
 echo("Cup depth = ", cup_depth);
+echo("Cup insertion side = ", cup_insertion_side);
+echo("Cup retaining side = ", cup_retaining_side);
+echo("Cup front offset mm = ", cup_front_offset_mm);
+echo("Cup rear offset mm = ", cup_rear_offset_mm);
 echo("Advanced section count = ", ${sections.length});
 echo("Max section index used = ", ${sectionData.maxSectionIndex + 1});
 ${debugBores}

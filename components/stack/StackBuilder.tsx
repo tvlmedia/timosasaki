@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getRecommendedBarrelInnerDiameter } from "@/lib/calculations";
+import { getRecommendedBarrelInnerDiameter, getTotalStackLength } from "@/lib/calculations";
 import { createId } from "@/lib/ids";
 import { defaultOpticalTypeByStackType, getItemOpticalType, opticalTypeOptions } from "@/lib/stackMeta";
 import { Button } from "@/components/common/Button";
@@ -37,6 +37,74 @@ type SpacerDiameterMode = "match_lens_cups" | "match_carrier" | "manual";
 const spacerDiameterModeOptions: Array<{ value: SpacerDiameterMode; label: string }> = [
   { value: "match_lens_cups", label: "Match lens cups" },
   { value: "manual", label: "Manual" }
+];
+
+const thicknessMeasurementTypeOptions: Array<{
+  value:
+    | "edge_thickness"
+    | "center_max_thickness"
+    | "straight_body_thickness"
+    | "mechanical_block_length"
+    | "estimated"
+    | "unknown";
+  label: string;
+}> = [
+  { value: "edge_thickness", label: "Edge thickness" },
+  { value: "center_max_thickness", label: "Center/max thickness" },
+  { value: "straight_body_thickness", label: "Straight body thickness" },
+  { value: "mechanical_block_length", label: "Mechanical block length" },
+  { value: "estimated", label: "Estimated" },
+  { value: "unknown", label: "Unknown" }
+];
+
+const measurementConfidenceOptions: Array<{ value: "measured" | "estimated" | "unknown"; label: string }> = [
+  { value: "measured", label: "Measured" },
+  { value: "estimated", label: "Estimated" },
+  { value: "unknown", label: "Unknown" }
+];
+
+const cupInsertionSideOptions: Array<{ value: "auto" | "front" | "rear"; label: string }> = [
+  { value: "auto", label: "Auto" },
+  { value: "front", label: "Front" },
+  { value: "rear", label: "Rear" }
+];
+
+const cupRetainingSideOptions: Array<{
+  value: "auto" | "front" | "rear" | "both" | "none";
+  label: string;
+}> = [
+  { value: "auto", label: "Auto" },
+  { value: "front", label: "Front" },
+  { value: "rear", label: "Rear" },
+  { value: "both", label: "Both" },
+  { value: "none", label: "None" }
+];
+
+const spacerThicknessSourceOptions: Array<{
+  value: "same_as_airspace" | "calculated_from_cup_offsets" | "manual_override";
+  label: string;
+}> = [
+  { value: "same_as_airspace", label: "Same as optical airspace" },
+  { value: "calculated_from_cup_offsets", label: "Calculated from cup offsets" },
+  { value: "manual_override", label: "Manual override" }
+];
+
+const airspaceMeasurementTypeOptions: Array<{
+  value:
+    | "optical_surface_to_optical_surface"
+    | "mechanical_edge_or_seat_to_edge_or_seat"
+    | "cad_face_to_cad_face"
+    | "physical_caliper_estimate"
+    | "estimated"
+    | "unknown";
+  label: string;
+}> = [
+  { value: "optical_surface_to_optical_surface", label: "Optical surface to optical surface" },
+  { value: "mechanical_edge_or_seat_to_edge_or_seat", label: "Mechanical edge/seat to edge/seat" },
+  { value: "cad_face_to_cad_face", label: "CAD face to CAD face" },
+  { value: "physical_caliper_estimate", label: "Physical caliper estimate" },
+  { value: "estimated", label: "Estimated" },
+  { value: "unknown", label: "Unknown" }
 ];
 
 const DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM = 0.6;
@@ -77,6 +145,8 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         positionIndex: index,
         diameterMm: 30,
         thicknessMm: 4,
+        thicknessMeasurementType: "unknown",
+        thicknessConfidence: "unknown",
         hasSteppedProfile: false,
         stepDirection: "unknown",
         advancedProfile: {
@@ -88,9 +158,14 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         },
         advancedProfileEnabled: false,
         profileSegments: [],
-        flipped: false
+        flipped: false,
+        cupInsertionSide: "auto",
+        cupRetainingSide: "auto",
+        retainingLipEnabled: true,
+        retainingLipThicknessMm: 1.2
       };
-    case "spacer":
+    case "spacer": {
+      const desiredOpticalAirGapMm = 1;
       return {
         id,
         name: "New spacer / air gap ring",
@@ -99,13 +174,21 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         positionIndex: index,
         innerDiameterMm: 28,
         outerDiameterMm: 38,
-        thicknessMm: 1,
+        thicknessMm: desiredOpticalAirGapMm,
+        desiredOpticalAirGapMm,
+        physicalSpacerThicknessMm: desiredOpticalAirGapMm,
+        physicalSpacerThicknessSource: "same_as_airspace",
+        airspaceMeasurementType: "unknown",
+        airspaceConfidence: "unknown",
+        insertedItems: [],
+        insertedItemsTotalThicknessMm: 0,
         autoFitToBarrel: true,
         spacerDiameterMode: "match_lens_cups",
         hasAntiReflectionGrooves: false,
         chamferEnabled: false,
         chamferMm: 0.2
       };
+    }
     case "iris":
       return {
         id,
@@ -369,6 +452,12 @@ function getAdvancedProfileWarnings(profile: AdvancedGlassProfile | undefined): 
   } else if (differenceAbs > 1) {
     warnings.push("Advanced physical profile section sum differs from total length by more than 1.0 mm.");
   }
+  if (
+    toPositive(profile.maxDiameterMm) > 0 &&
+    sections.some((section) => toPositive(section.diameterMm) > toPositive(profile.maxDiameterMm))
+  ) {
+    warnings.push("Advanced physical profile max diameter is smaller than a section diameter.");
+  }
 
   return warnings;
 }
@@ -475,6 +564,28 @@ function getSpacerDiameterMode(item: Extract<StackItem, { type: "spacer" }>): Sp
   }
   if (item.spacerDiameterMode === "match_carrier") return "match_lens_cups";
   return item.autoFitToBarrel === false ? "manual" : "match_lens_cups";
+}
+
+function getSpacerDesiredOpticalAirGapMm(item: Extract<StackItem, { type: "spacer" }>): number {
+  const desired = toPositive(item.desiredOpticalAirGapMm);
+  if (desired > 0) return desired;
+  const fallback = toPositive(item.thicknessMm);
+  return fallback > 0 ? fallback : 0;
+}
+
+function getSpacerPhysicalThicknessMm(item: Extract<StackItem, { type: "spacer" }>): number {
+  const physical = toPositive(item.physicalSpacerThicknessMm);
+  if (physical > 0) return physical;
+  return getSpacerDesiredOpticalAirGapMm(item);
+}
+
+function getSpacerThicknessSource(
+  item: Extract<StackItem, { type: "spacer" }>
+): "same_as_airspace" | "calculated_from_cup_offsets" | "manual_override" {
+  return item.physicalSpacerThicknessSource === "calculated_from_cup_offsets" ||
+    item.physicalSpacerThicknessSource === "manual_override"
+    ? item.physicalSpacerThicknessSource
+    : "same_as_airspace";
 }
 
 function getGlassMaxDiameterForCup(item?: StackItem): number {
@@ -599,7 +710,20 @@ function applyAutoFitSpacerDimensions(
   return items.map((item, index) => {
     if (item.type !== "spacer") return item;
     const auto = deriveSpacerRingDimensions(items, mechanicalParts, defaults, index, item);
-    return { ...item, ...auto };
+    const desiredOpticalAirGapMm = getSpacerDesiredOpticalAirGapMm(item);
+    const physicalSpacerThicknessMm = getSpacerPhysicalThicknessMm(item);
+    return {
+      ...item,
+      ...auto,
+      thicknessMm: physicalSpacerThicknessMm,
+      desiredOpticalAirGapMm,
+      physicalSpacerThicknessMm,
+      physicalSpacerThicknessSource: getSpacerThicknessSource(item),
+      airspaceMeasurementType: item.airspaceMeasurementType ?? "unknown",
+      airspaceConfidence: item.airspaceConfidence ?? "unknown",
+      insertedItems: item.insertedItems ?? [],
+      insertedItemsTotalThicknessMm: item.insertedItemsTotalThicknessMm ?? 0
+    };
   });
 }
 
@@ -628,8 +752,14 @@ function validateItem(item: StackItem): string[] {
       }
       break;
     case "spacer":
-      if (invalid(item.innerDiameterMm) || invalid(item.outerDiameterMm) || invalid(item.thicknessMm)) {
+      if (invalid(item.innerDiameterMm) || invalid(item.outerDiameterMm)) {
         errors.push("Spacer / Air Gap Ring dimensions must be positive.");
+      }
+      if (getSpacerDesiredOpticalAirGapMm(item) <= 0) {
+        errors.push("Desired optical air gap must be positive.");
+      }
+      if (getSpacerPhysicalThicknessMm(item) <= 0) {
+        errors.push("Printed spacer thickness must be positive.");
       }
       if (item.innerDiameterMm >= item.outerDiameterMm) {
         errors.push("Spacer / Air Gap Ring inner diameter must be smaller than outer.");
@@ -696,12 +826,22 @@ export function StackBuilder({
   const selectedItem = orderedItems.find((item) => item.id === selectedId) ?? orderedItems[0];
   const selectedErrors = selectedItem ? validateItem(selectedItem) : [];
   const selectedGlass = selectedItem?.type === "glass" ? selectedItem : undefined;
+  const selectedSpacer = selectedItem?.type === "spacer" ? selectedItem : undefined;
   const selectedAdvancedProfile = selectedGlass ? getEffectiveAdvancedProfile(selectedGlass) : undefined;
   const selectedAdvancedSections = normalizeAdvancedSections(selectedAdvancedProfile?.sections ?? []);
   const selectedAdvancedSectionSum = getAdvancedProfileSectionSum(selectedAdvancedProfile);
   const selectedAdvancedLengthDifference = (selectedAdvancedProfile?.totalLengthMm ?? 0) - selectedAdvancedSectionSum;
   const selectedAdvancedLengthDifferenceAbs = Math.abs(selectedAdvancedLengthDifference);
   const selectedAdvancedWarnings = getAdvancedProfileWarnings(selectedAdvancedProfile);
+  const selectedSpacerDesiredOpticalAirGapMm = selectedSpacer
+    ? getSpacerDesiredOpticalAirGapMm(selectedSpacer)
+    : 0;
+  const selectedSpacerPhysicalThicknessMm = selectedSpacer
+    ? getSpacerPhysicalThicknessMm(selectedSpacer)
+    : 0;
+  const selectedSpacerThicknessSource = selectedSpacer
+    ? getSpacerThicknessSource(selectedSpacer)
+    : "same_as_airspace";
 
   const commitProjectState = (nextItems: StackItem[], nextMechanicalParts: MechanicalPart[]) => {
     const normalizedInput = normalizePositions(nextItems);
@@ -978,6 +1118,7 @@ export function StackBuilder({
     getTargetStackOuterDiameter(orderedItems, mechanicalParts, project.cadDefaults).toFixed(2)
   );
   const resolvedLargestGlassDiameterMm = Number(getLargestGlassMaxDiameter(orderedItems).toFixed(2));
+  const resolvedOpticalStackLengthMm = Number(getTotalStackLength(orderedItems).toFixed(2));
   const resolvedCupToCarrierClearanceMm = Math.max(
     0,
     toPositive(project.cadDefaults.cupToCarrierClearanceMm) || DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM
@@ -1133,8 +1274,17 @@ export function StackBuilder({
             Largest glass diameter: <span className="mono text-labText">{resolvedLargestGlassDiameterMm.toFixed(2)} mm</span>
           </p>
           <p>
+            Optical stack length: <span className="mono text-labText">{resolvedOpticalStackLengthMm.toFixed(2)} mm</span>
+          </p>
+          <p>
             Shared stack OD (lens cups + spacers):{" "}
             <span className="mono text-labText">{resolvedTargetStackOuterDiameterMm.toFixed(2)} mm</span>
+          </p>
+          <p>
+            Lens cup OD / spacer OD:{" "}
+            <span className="mono text-labText">
+              {resolvedTargetStackOuterDiameterMm.toFixed(2)} / {resolvedTargetStackOuterDiameterMm.toFixed(2)} mm
+            </span>
           </p>
           <p>
             Carrier ID / OD:{" "}
@@ -1255,6 +1405,44 @@ export function StackBuilder({
                       }))
                     }
                   />
+                  <Select
+                    label="Thickness measurement type"
+                    value={selectedItem.thicknessMeasurementType ?? "unknown"}
+                    onChange={(event) =>
+                      updateTypedItem(selectedItem.id, "glass", (entry) => ({
+                        ...entry,
+                        thicknessMeasurementType: event.target.value as
+                          | "edge_thickness"
+                          | "center_max_thickness"
+                          | "straight_body_thickness"
+                          | "mechanical_block_length"
+                          | "estimated"
+                          | "unknown"
+                      }))
+                    }
+                  >
+                    {thicknessMeasurementTypeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                  <Select
+                    label="Thickness confidence"
+                    value={selectedItem.thicknessConfidence ?? "unknown"}
+                    onChange={(event) =>
+                      updateTypedItem(selectedItem.id, "glass", (entry) => ({
+                        ...entry,
+                        thicknessConfidence: event.target.value as "measured" | "estimated" | "unknown"
+                      }))
+                    }
+                  >
+                    {measurementConfidenceOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
                   <NumberInput
                     label="Clear aperture / usable optical diameter (mm)"
                     value={selectedItem.clearApertureMm ?? ""}
@@ -1266,6 +1454,10 @@ export function StackBuilder({
                       }))
                     }
                   />
+                  <p className="text-xs leading-relaxed text-labMuted">
+                    Thickness can be edge thickness, center/max thickness, straight body thickness, or an estimate.
+                    AirSpaces should be used as the primary truth for optical positioning.
+                  </p>
                   <p className="text-xs leading-relaxed text-labMuted">
                     Optional. Leave empty if unknown. This is the usable optical diameter, not the physical glass
                     diameter. Used for vignetting and retaining-lip warnings.
@@ -1530,6 +1722,47 @@ export function StackBuilder({
                       </div>
                     )}
                   </div>
+                  <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3">
+                    <p className="mb-2 text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">
+                      Cup Insertion + Retaining
+                    </p>
+                    <Select
+                      label="Cup insertion side"
+                      value={selectedItem.cupInsertionSide ?? "auto"}
+                      onChange={(event) =>
+                        updateTypedItem(selectedItem.id, "glass", (entry) => ({
+                          ...entry,
+                          cupInsertionSide: event.target.value as "auto" | "front" | "rear"
+                        }))
+                      }
+                    >
+                      {cupInsertionSideOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </Select>
+                    <Select
+                      label="Cup retaining side"
+                      value={selectedItem.cupRetainingSide ?? "auto"}
+                      onChange={(event) =>
+                        updateTypedItem(selectedItem.id, "glass", (entry) => ({
+                          ...entry,
+                          cupRetainingSide: event.target.value as "auto" | "front" | "rear" | "both" | "none"
+                        }))
+                      }
+                    >
+                      {cupRetainingSideOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </Select>
+                    <p className="text-xs leading-relaxed text-labMuted">
+                      Optical profile stays FRONT → SENSOR. Cup insertion side is a mechanical loading choice and is
+                      handled during CAD generation.
+                    </p>
+                  </div>
                   <label className="flex items-center gap-2 text-sm text-labMuted">
                     <input
                       type="checkbox"
@@ -1549,8 +1782,8 @@ export function StackBuilder({
               {selectedItem.type === "spacer" && (
                 <>
                   <p className="rounded-lg border border-labBorder bg-[#0b0b0b] px-3 py-2 text-xs leading-relaxed text-labMuted">
-                    A physical ring/shim that sets the optical air gap between parts. The inner hole stays open for
-                    the light path.
+                    AirSpace is the optical/layout target. This spacer is the generated mechanical part used to
+                    realize that airspace in the stack.
                   </p>
                   <Select
                     label="Spacer diameter mode"
@@ -1621,16 +1854,120 @@ export function StackBuilder({
                     Spacer OD is locked to the shared stack OD so all spacers and lens cups stay cylindrical.
                   </p>
                   <NumberInput
-                    label="Thickness (mm)"
-                    value={selectedItem.thicknessMm}
+                    label="Desired optical air gap mm"
+                    value={selectedSpacerDesiredOpticalAirGapMm}
                     min={0}
                     onChange={(event) =>
                       updateTypedItem(selectedItem.id, "spacer", (entry) => ({
                         ...entry,
-                        thicknessMm: Number(event.target.value)
+                        desiredOpticalAirGapMm: Number(event.target.value),
+                        thicknessMm:
+                          getSpacerThicknessSource(entry) === "manual_override"
+                            ? entry.thicknessMm
+                            : Number(event.target.value),
+                        physicalSpacerThicknessMm:
+                          getSpacerThicknessSource(entry) === "manual_override"
+                            ? entry.physicalSpacerThicknessMm
+                            : Number(event.target.value)
                       }))
                     }
                   />
+                  <Select
+                    label="Airspace measurement type"
+                    value={selectedItem.airspaceMeasurementType ?? "unknown"}
+                    onChange={(event) =>
+                      updateTypedItem(selectedItem.id, "spacer", (entry) => ({
+                        ...entry,
+                        airspaceMeasurementType: event.target.value as
+                          | "optical_surface_to_optical_surface"
+                          | "mechanical_edge_or_seat_to_edge_or_seat"
+                          | "cad_face_to_cad_face"
+                          | "physical_caliper_estimate"
+                          | "estimated"
+                          | "unknown"
+                      }))
+                    }
+                  >
+                    {airspaceMeasurementTypeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                  <Select
+                    label="Airspace confidence"
+                    value={selectedItem.airspaceConfidence ?? "unknown"}
+                    onChange={(event) =>
+                      updateTypedItem(selectedItem.id, "spacer", (entry) => ({
+                        ...entry,
+                        airspaceConfidence: event.target.value as "measured" | "estimated" | "unknown"
+                      }))
+                    }
+                  >
+                    {measurementConfidenceOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                  <NumberInput
+                    label="Printed spacer thickness mm"
+                    value={selectedSpacerPhysicalThicknessMm}
+                    min={0}
+                    onChange={(event) =>
+                      updateTypedItem(selectedItem.id, "spacer", (entry) => ({
+                        ...entry,
+                        thicknessMm: Number(event.target.value),
+                        physicalSpacerThicknessMm: Number(event.target.value),
+                        physicalSpacerThicknessSource: "manual_override"
+                      }))
+                    }
+                  />
+                  <Select
+                    label="Source of printed spacer thickness"
+                    value={selectedSpacerThicknessSource}
+                    onChange={(event) =>
+                      updateTypedItem(selectedItem.id, "spacer", (entry) => {
+                        const nextSource = event.target.value as
+                          | "same_as_airspace"
+                          | "calculated_from_cup_offsets"
+                          | "manual_override";
+                        const desired = getSpacerDesiredOpticalAirGapMm(entry);
+                        return {
+                          ...entry,
+                          physicalSpacerThicknessSource: nextSource,
+                          physicalSpacerThicknessMm:
+                            nextSource === "manual_override"
+                              ? getSpacerPhysicalThicknessMm(entry)
+                              : desired,
+                          thicknessMm: nextSource === "manual_override" ? getSpacerPhysicalThicknessMm(entry) : desired
+                        };
+                      })
+                    }
+                  >
+                    {spacerThicknessSourceOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                  {selectedSpacerThicknessSource === "same_as_airspace" && (
+                    <p className="text-xs leading-relaxed text-labMuted">
+                      Printed spacer currently equals measured airspace. Cup offset compensation not applied.
+                    </p>
+                  )}
+                  {selectedSpacerThicknessSource === "calculated_from_cup_offsets" && (
+                    <p className="text-xs leading-relaxed text-labMuted">
+                      Printed spacer thickness is prepared for cup-offset compensation. Final compensation is applied in
+                      CAD generation when offsets are available.
+                    </p>
+                  )}
+                  {selectedSpacerThicknessSource === "manual_override" && (
+                    <p className="text-xs leading-relaxed text-labMuted">
+                      Manual override is active. Desired optical air gap and printed spacer thickness are tracked
+                      separately.
+                    </p>
+                  )}
                   <label className="flex items-center gap-2 text-sm text-labMuted">
                     <input
                       type="checkbox"

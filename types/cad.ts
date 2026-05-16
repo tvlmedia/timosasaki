@@ -1,4 +1,9 @@
-import type { StepDirection } from "@/types/measurement";
+import type {
+  AirspaceMeasurementType,
+  MeasurementConfidence,
+  PhysicalSpacerThicknessSource,
+  StepDirection
+} from "@/types/measurement";
 
 export type CadDefaults = {
   printToleranceMm: number;
@@ -101,6 +106,15 @@ export type ElementCupParams = {
   wallThicknessMm: number;
   retainingLipMm: number;
   rearLipMm: number;
+  cupInsertionSide?: "auto" | "front" | "rear";
+  cupRetainingSide?: "auto" | "front" | "rear" | "both" | "none";
+  resolvedCupInsertionSide?: "front" | "rear";
+  resolvedCupRetainingSide?: "front" | "rear" | "both" | "none";
+  retainingLipEnabled?: boolean;
+  retainingLipThicknessMm?: number;
+  retainingLipInnerDiameterMm?: number;
+  cupFrontOffsetMm?: number;
+  cupRearOffsetMm?: number;
   cupDepthMm?: number;
   outerDiameterMm?: number;
   facets: number;
@@ -111,6 +125,16 @@ export type SpacerRingParams = {
   innerDiameterMm: number;
   outerDiameterMm: number;
   thicknessMm: number;
+  desiredOpticalAirGapMm?: number;
+  physicalSpacerThicknessMm?: number;
+  physicalSpacerThicknessSource?: PhysicalSpacerThicknessSource;
+  airspaceMeasurementType?: AirspaceMeasurementType;
+  airspaceConfidence?: MeasurementConfidence;
+  previousCupRearOffsetMm?: number;
+  nextCupFrontOffsetMm?: number;
+  insertedItemsTotalThicknessMm?: number;
+  calculatedPhysicalSpacerThicknessMm?: number;
+  spacerThicknessSource?: PhysicalSpacerThicknessSource;
   hasAntiReflectionGrooves: boolean;
   chamferEnabled?: boolean;
   chamferMm?: number;

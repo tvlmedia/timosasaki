@@ -51,6 +51,15 @@ function toPositive(value: number | undefined): number {
   return value;
 }
 
+function sumInsertedItemsThickness(
+  insertedItems: Array<{ thicknessMm?: number }> | undefined
+): number {
+  return (insertedItems ?? []).reduce((sum, item) => {
+    const thickness = toPositive(item.thicknessMm);
+    return thickness > 0 ? sum + thickness : sum;
+  }, 0);
+}
+
 function buildSteppedSegmentsFromMeasurementFields(fields: {
   hasSteppedProfile?: boolean;
   largeDiameterMm?: number;
@@ -154,11 +163,41 @@ export function normalizeProject(project: LensProject): LensProject {
               ? base.spacerDiameterMode
               : base.spacerDiameterMode === "match_carrier"
                 ? "match_lens_cups"
-                : base.autoFitToBarrel === false
+              : base.autoFitToBarrel === false
                   ? "manual"
                   : "match_lens_cups";
+          const desiredOpticalAirGapMm =
+            toPositive(base.desiredOpticalAirGapMm) > 0
+              ? (base.desiredOpticalAirGapMm as number)
+              : toPositive(base.thicknessMm) > 0
+                ? base.thicknessMm
+                : 1;
+          const physicalSpacerThicknessMm =
+            toPositive(base.physicalSpacerThicknessMm) > 0
+              ? (base.physicalSpacerThicknessMm as number)
+              : toPositive(base.thicknessMm) > 0
+                ? base.thicknessMm
+                : desiredOpticalAirGapMm;
+          const physicalSpacerThicknessSource =
+            base.physicalSpacerThicknessSource === "calculated_from_cup_offsets" ||
+            base.physicalSpacerThicknessSource === "manual_override"
+              ? base.physicalSpacerThicknessSource
+              : "same_as_airspace";
+          const insertedItems = base.insertedItems ?? [];
+          const insertedItemsTotalThicknessMm =
+            toPositive(base.insertedItemsTotalThicknessMm) > 0
+              ? (base.insertedItemsTotalThicknessMm as number)
+              : sumInsertedItemsThickness(insertedItems);
           return {
             ...base,
+            thicknessMm: physicalSpacerThicknessMm,
+            desiredOpticalAirGapMm,
+            physicalSpacerThicknessMm,
+            physicalSpacerThicknessSource,
+            airspaceMeasurementType: base.airspaceMeasurementType ?? "unknown",
+            airspaceConfidence: base.airspaceConfidence ?? "unknown",
+            insertedItems,
+            insertedItemsTotalThicknessMm,
             autoFitToBarrel: mode !== "manual",
             spacerDiameterMode: mode,
             manualInnerDiameterMm:
@@ -226,6 +265,25 @@ export function normalizeProject(project: LensProject): LensProject {
           : {};
         return {
           ...base,
+          thicknessMeasurementType:
+            base.thicknessMeasurementType ?? linkedFields?.thicknessMeasurementType ?? "unknown",
+          thicknessConfidence: base.thicknessConfidence ?? linkedFields?.thicknessConfidence ?? "unknown",
+          cupInsertionSide:
+            base.cupInsertionSide === "front" || base.cupInsertionSide === "rear"
+              ? base.cupInsertionSide
+              : "auto",
+          cupRetainingSide:
+            base.cupRetainingSide === "front" ||
+            base.cupRetainingSide === "rear" ||
+            base.cupRetainingSide === "both" ||
+            base.cupRetainingSide === "none"
+              ? base.cupRetainingSide
+              : "auto",
+          retainingLipEnabled: base.retainingLipEnabled ?? true,
+          retainingLipThicknessMm:
+            toPositive(base.retainingLipThicknessMm) > 0 ? base.retainingLipThicknessMm : undefined,
+          retainingLipInnerDiameterMm:
+            toPositive(base.retainingLipInnerDiameterMm) > 0 ? base.retainingLipInnerDiameterMm : undefined,
           physicalComponentMode: base.physicalComponentMode ?? "single_element",
           opticalSubElements: base.opticalSubElements ?? [],
           ...hydratedStepped
@@ -329,9 +387,41 @@ function normalizeMeasurements(
           ? {
               ...(annotation.fields ?? {}),
               physicalComponentMode: annotation.fields?.physicalComponentMode ?? "single_element",
-              opticalSubElements: annotation.fields?.opticalSubElements ?? []
+              opticalSubElements: annotation.fields?.opticalSubElements ?? [],
+              thicknessMeasurementType: annotation.fields?.thicknessMeasurementType ?? "unknown",
+              thicknessConfidence: annotation.fields?.thicknessConfidence ?? "unknown"
             }
-          : (annotation.fields ?? {}),
+          : annotation.itemType === "spacer_ring"
+            ? {
+                ...(annotation.fields ?? {}),
+                thicknessMm:
+                  toPositive(annotation.fields?.thicknessMm) > 0
+                    ? annotation.fields?.thicknessMm
+                    : toPositive(annotation.fields?.desiredOpticalAirGapMm) > 0
+                      ? annotation.fields?.desiredOpticalAirGapMm
+                      : 1,
+                desiredOpticalAirGapMm:
+                  toPositive(annotation.fields?.desiredOpticalAirGapMm) > 0
+                    ? annotation.fields?.desiredOpticalAirGapMm
+                    : toPositive(annotation.fields?.thicknessMm) > 0
+                      ? annotation.fields?.thicknessMm
+                      : 1,
+                physicalSpacerThicknessMm:
+                  toPositive(annotation.fields?.physicalSpacerThicknessMm) > 0
+                    ? annotation.fields?.physicalSpacerThicknessMm
+                    : toPositive(annotation.fields?.thicknessMm) > 0
+                      ? annotation.fields?.thicknessMm
+                      : 1,
+                physicalSpacerThicknessSource:
+                  annotation.fields?.physicalSpacerThicknessSource === "calculated_from_cup_offsets" ||
+                  annotation.fields?.physicalSpacerThicknessSource === "manual_override"
+                    ? annotation.fields?.physicalSpacerThicknessSource
+                    : "same_as_airspace",
+                airspaceMeasurementType: annotation.fields?.airspaceMeasurementType ?? "unknown",
+                airspaceConfidence: annotation.fields?.airspaceConfidence ?? "unknown",
+                insertedItems: annotation.fields?.insertedItems ?? []
+              }
+            : (annotation.fields ?? {}),
       createdAt: annotation.createdAt ?? nowIso,
       updatedAt: annotation.updatedAt ?? nowIso
     })),

@@ -1,11 +1,16 @@
 import type {
+  AirspaceInsertedItem,
+  AirspaceMeasurementType,
   ElementOverallType,
   ElementOrientation,
+  MeasurementConfidence,
   OpticalGroupType,
   OpticalSubElement,
   PhysicalComponentMode,
   OpticalPowerGuess,
+  PhysicalSpacerThicknessSource,
   StepDirection,
+  ThicknessMeasurementType,
   SurfaceShape
 } from "@/types/measurement";
 
@@ -71,6 +76,8 @@ export type GlassItem = BaseStackItem & {
   type: "glass";
   diameterMm: number;
   thicknessMm: number;
+  thicknessMeasurementType?: ThicknessMeasurementType;
+  thicknessConfidence?: MeasurementConfidence;
   advancedProfile?: AdvancedGlassProfile;
   advancedProfileEnabled?: boolean;
   profileSegments?: GlassProfileSegment[];
@@ -104,6 +111,11 @@ export type GlassItem = BaseStackItem & {
   decenterMm?: number;
   tiltDeg?: number;
   measuredConfidence?: "low" | "medium" | "high";
+  cupInsertionSide?: "auto" | "front" | "rear";
+  cupRetainingSide?: "auto" | "front" | "rear" | "both" | "none";
+  retainingLipEnabled?: boolean;
+  retainingLipThicknessMm?: number;
+  retainingLipInnerDiameterMm?: number;
 };
 
 export type SpacerItem = BaseStackItem & {
@@ -111,6 +123,15 @@ export type SpacerItem = BaseStackItem & {
   innerDiameterMm: number;
   outerDiameterMm: number;
   thicknessMm: number;
+  desiredOpticalAirGapMm?: number;
+  physicalSpacerThicknessMm?: number;
+  physicalSpacerThicknessSource?: PhysicalSpacerThicknessSource;
+  airspaceMeasurementType?: AirspaceMeasurementType;
+  airspaceConfidence?: MeasurementConfidence;
+  insertedItems?: AirspaceInsertedItem[];
+  insertedItemsTotalThicknessMm?: number;
+  previousCupRearOffsetMm?: number;
+  nextCupFrontOffsetMm?: number;
   autoFitToBarrel?: boolean;
   spacerDiameterMode?: "match_lens_cups" | "match_carrier" | "manual";
   manualInnerDiameterMm?: number;

@@ -84,6 +84,38 @@ export type AdvancedPhysicalProfile = {
   sections: AdvancedPhysicalProfileSection[];
 };
 
+export type ThicknessMeasurementType =
+  | "edge_thickness"
+  | "center_max_thickness"
+  | "straight_body_thickness"
+  | "mechanical_block_length"
+  | "estimated"
+  | "unknown";
+
+export type MeasurementConfidence = "measured" | "estimated" | "unknown";
+
+export type AirspaceMeasurementType =
+  | "optical_surface_to_optical_surface"
+  | "mechanical_edge_or_seat_to_edge_or_seat"
+  | "cad_face_to_cad_face"
+  | "physical_caliper_estimate"
+  | "estimated"
+  | "unknown";
+
+export type PhysicalSpacerThicknessSource =
+  | "same_as_airspace"
+  | "calculated_from_cup_offsets"
+  | "manual_override";
+
+export type AirspaceInsertedItem = {
+  id: string;
+  type: "iris" | "filter" | "diffusion" | "custom";
+  label?: string;
+  thicknessMm: number;
+  positionMode?: "centered" | "distance_from_previous" | "distance_from_next" | "manual";
+  positionMm?: number;
+};
+
 export type MeasurementItemType = "glass" | "spacer_ring" | "housing_barrel" | "iris_disk" | "other";
 
 export type PhysicalComponentMode = "single_element" | "optical_group";
@@ -131,6 +163,8 @@ export type MeasurementFields = {
   thicknessMm?: number;
   edgeThicknessMm?: number;
   clearApertureMm?: number;
+  thicknessMeasurementType?: ThicknessMeasurementType;
+  thicknessConfidence?: MeasurementConfidence;
 
   hasSteppedProfile?: boolean;
   largeDiameterMm?: number;
@@ -144,6 +178,12 @@ export type MeasurementFields = {
   innerDiameterMm?: number;
   outerDiameterMm?: number;
   lengthMm?: number;
+  desiredOpticalAirGapMm?: number;
+  physicalSpacerThicknessMm?: number;
+  physicalSpacerThicknessSource?: PhysicalSpacerThicknessSource;
+  airspaceMeasurementType?: AirspaceMeasurementType;
+  airspaceConfidence?: MeasurementConfidence;
+  insertedItems?: AirspaceInsertedItem[];
 
   apertureDiameterMm?: number;
   diskDiameterMm?: number;

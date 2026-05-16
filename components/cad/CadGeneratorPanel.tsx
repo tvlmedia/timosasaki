@@ -75,6 +75,8 @@ type SlidingCarrierOverrides = {
 
 type CarrierLengthDerivedSource = "manual" | "optical_stack_length";
 type SlotLengthSource = "focus_travel" | "manual_default";
+type ResolvedCupInsertionSide = "front" | "rear";
+type ResolvedCupRetainingSide = "front" | "rear" | "both" | "none";
 
 type CascadeSizing = {
   sourceGlass?: Extract<StackItem, { type: "glass" }>;
@@ -234,6 +236,145 @@ function normalizeAdvancedProfileForCup(
   };
 }
 
+function getAdvancedProfileTotalLengthMm(profile: ElementCupParams["advancedProfile"] | undefined): number {
+  if (!profile?.enabled) return 0;
+  const sectionSum = (profile.sections ?? []).reduce((sum, section) => sum + toPositive(section.lengthMm), 0);
+  if (sectionSum > 0) return sectionSum;
+  return toPositive(profile.totalLengthMm);
+}
+
+function resolveCupInsertionSide(
+  glass: Extract<StackItem, { type: "glass" }> | undefined,
+  advancedProfile: ElementCupParams["advancedProfile"] | undefined
+): ResolvedCupInsertionSide {
+  if (glass?.cupInsertionSide === "front" || glass?.cupInsertionSide === "rear") {
+    return glass.cupInsertionSide;
+  }
+  if (advancedProfile?.enabled) {
+    const totalLength = getAdvancedProfileTotalLengthMm(advancedProfile);
+    const maxPos = toPositive(advancedProfile.maxDiameterPositionFromFrontMm);
+    if (totalLength > 0) {
+      const distanceFromFront = Math.max(0, Math.min(totalLength, maxPos));
+      const distanceFromRear = Math.max(0, totalLength - distanceFromFront);
+      return distanceFromFront <= distanceFromRear ? "front" : "rear";
+    }
+  }
+  return "front";
+}
+
+function resolveCupRetainingSide(
+  glass: Extract<StackItem, { type: "glass" }> | undefined,
+  insertionSide: ResolvedCupInsertionSide
+): ResolvedCupRetainingSide {
+  if (
+    glass?.cupRetainingSide === "front" ||
+    glass?.cupRetainingSide === "rear" ||
+    glass?.cupRetainingSide === "both" ||
+    glass?.cupRetainingSide === "none"
+  ) {
+    return glass.cupRetainingSide;
+  }
+  return insertionSide === "front" ? "rear" : "front";
+}
+
+function getNearestGlassOnSide(
+  items: StackItem[],
+  fromIndex: number,
+  direction: -1 | 1
+): Extract<StackItem, { type: "glass" }> | undefined {
+  let index = fromIndex + direction;
+  while (index >= 0 && index < items.length) {
+    const current = items[index];
+    if (current.type === "glass") return current;
+    index += direction;
+  }
+  return undefined;
+}
+
+function estimateCupOffsetsForGlass(
+  glass: Extract<StackItem, { type: "glass" }> | undefined,
+  defaults: CadDefaults
+): {
+  cupFrontOffsetMm: number;
+  cupRearOffsetMm: number;
+  insertionSide: ResolvedCupInsertionSide;
+  retainingSide: ResolvedCupRetainingSide;
+  rearLipMm: number;
+  extraDepthMm: number;
+  available: boolean;
+} {
+  if (!glass) {
+    return {
+      cupFrontOffsetMm: 0,
+      cupRearOffsetMm: 0,
+      insertionSide: "front",
+      retainingSide: "rear",
+      rearLipMm: 0,
+      extraDepthMm: 0,
+      available: false
+    };
+  }
+
+  const advancedProfile = normalizeAdvancedProfileForCup(glass);
+  const insertionSide = resolveCupInsertionSide(glass, advancedProfile);
+  const preferredRetainingSide = resolveCupRetainingSide(glass, insertionSide);
+  const retainingSide: ResolvedCupRetainingSide =
+    preferredRetainingSide === "none"
+      ? "none"
+      : insertionSide === "front"
+        ? "rear"
+        : "front";
+  const rearLipMm = getElementCupRearLipDefaultMm(glass, defaults);
+  const profileLengthMm =
+    getGlassProfileLengthMm(glass) ?? toPositive(glass.thicknessMm);
+  const cupDepthMm = estimateLensCupDepthMm(glass, defaults) ?? profileLengthMm + rearLipMm + 0.5;
+  const extraDepthMm = Math.max(0, cupDepthMm - (profileLengthMm + rearLipMm));
+  const retainingOffsetMm = retainingSide === "none" ? 0 : rearLipMm + extraDepthMm;
+
+  if (retainingSide === "front") {
+    return {
+      cupFrontOffsetMm: Number(retainingOffsetMm.toFixed(3)),
+      cupRearOffsetMm: 0,
+      insertionSide,
+      retainingSide,
+      rearLipMm,
+      extraDepthMm: Number(extraDepthMm.toFixed(3)),
+      available: true
+    };
+  }
+  if (retainingSide === "rear") {
+    return {
+      cupFrontOffsetMm: 0,
+      cupRearOffsetMm: Number(retainingOffsetMm.toFixed(3)),
+      insertionSide,
+      retainingSide,
+      rearLipMm,
+      extraDepthMm: Number(extraDepthMm.toFixed(3)),
+      available: true
+    };
+  }
+  if (retainingSide === "both") {
+    return {
+      cupFrontOffsetMm: Number(retainingOffsetMm.toFixed(3)),
+      cupRearOffsetMm: Number(retainingOffsetMm.toFixed(3)),
+      insertionSide,
+      retainingSide,
+      rearLipMm,
+      extraDepthMm: Number(extraDepthMm.toFixed(3)),
+      available: true
+    };
+  }
+  return {
+    cupFrontOffsetMm: 0,
+    cupRearOffsetMm: 0,
+    insertionSide,
+    retainingSide,
+    rearLipMm,
+    extraDepthMm: Number(extraDepthMm.toFixed(3)),
+    available: true
+  };
+}
+
 function getMeasuredGlassMaxDiameterMm(glass?: Extract<StackItem, { type: "glass" }>): number {
   if (!glass) return 0;
   const candidates: number[] = [toPositive(glass.diameterMm)];
@@ -256,6 +397,34 @@ function getMeasuredGlassMaxDiameterMm(glass?: Extract<StackItem, { type: "glass
   }
 
   return Math.max(0, ...candidates);
+}
+
+function getSpacerDesiredOpticalAirGapMm(spacer: Extract<StackItem, { type: "spacer" }> | undefined): number {
+  if (!spacer) return 0;
+  if (toPositive(spacer.desiredOpticalAirGapMm) > 0) return spacer.desiredOpticalAirGapMm as number;
+  return toPositive(spacer.thicknessMm);
+}
+
+function getSpacerPrintedThicknessMm(spacer: Extract<StackItem, { type: "spacer" }> | undefined): number {
+  if (!spacer) return 0;
+  if (toPositive(spacer.physicalSpacerThicknessMm) > 0) return spacer.physicalSpacerThicknessMm as number;
+  return toPositive(spacer.thicknessMm);
+}
+
+function getSpacerThicknessSource(
+  spacer: Extract<StackItem, { type: "spacer" }> | undefined
+): "same_as_airspace" | "calculated_from_cup_offsets" | "manual_override" {
+  if (!spacer) return "same_as_airspace";
+  return spacer.physicalSpacerThicknessSource === "calculated_from_cup_offsets" ||
+    spacer.physicalSpacerThicknessSource === "manual_override"
+    ? spacer.physicalSpacerThicknessSource
+    : "same_as_airspace";
+}
+
+function getSpacerInsertedItemsTotalThicknessMm(spacer: Extract<StackItem, { type: "spacer" }> | undefined): number {
+  if (!spacer) return 0;
+  if (toPositive(spacer.insertedItemsTotalThicknessMm) > 0) return spacer.insertedItemsTotalThicknessMm as number;
+  return (spacer.insertedItems ?? []).reduce((sum, item) => sum + toPositive(item.thicknessMm), 0);
 }
 
 function resolveCascadeSourceGlass(project: LensProject): Extract<StackItem, { type: "glass" }> | undefined {
@@ -305,7 +474,7 @@ function isAdvancedSteppedCup(glass?: Extract<StackItem, { type: "glass" }>): bo
 }
 
 function getElementCupRearLipDefaultMm(glass: Extract<StackItem, { type: "glass" }> | undefined, defaults: CadDefaults): number {
-  return isAdvancedSteppedCup(glass) ? Math.max(defaults.retainingLipMm, 1.2) : defaults.retainingLipMm;
+  return Math.max(defaults.retainingLipMm, 1.2);
 }
 
 function estimateLensCupDepthMm(
@@ -488,13 +657,15 @@ function getAdvancedProfileSectionSum(profile: ElementCupParams["advancedProfile
 
 function buildInsertionSafeBoreSections(
   profile: ElementCupParams["advancedProfile"] | undefined,
-  seatClearanceMm: number
+  seatClearanceMm: number,
+  insertionSide: ResolvedCupInsertionSide = "front"
 ): Array<{ zStartMm: number; zEndMm: number; diameterMm: number }> {
   if (!profile?.enabled) return [];
-  const sections = (profile.sections ?? [])
+  const orderedSections = (profile.sections ?? [])
     .slice()
     .sort((a, b) => a.index - b.index)
     .filter((section) => toPositive(section.diameterMm) > 0 && toPositive(section.lengthMm) > 0);
+  const sections = insertionSide === "rear" ? orderedSections.slice().reverse() : orderedSections;
   if (!sections.length || toPositive(profile.maxDiameterMm) <= 0) return [];
 
   let maxSectionIndex = 0;
@@ -567,8 +738,20 @@ function createPayload(
       const glass =
         (source?.type === "glass" ? source : undefined) ??
         cascade.sourceGlass;
-      const rearLipMm = getElementCupRearLipDefaultMm(glass, defaults);
       const advancedProfile = normalizeAdvancedProfileForCup(glass);
+      const resolvedCupInsertionSide = resolveCupInsertionSide(glass, advancedProfile);
+      const requestedCupRetainingSide =
+        glass?.cupRetainingSide === "front" ||
+        glass?.cupRetainingSide === "rear" ||
+        glass?.cupRetainingSide === "both" ||
+        glass?.cupRetainingSide === "none"
+          ? glass.cupRetainingSide
+          : "auto";
+      const resolvedCupRetainingSide = resolveCupRetainingSide(glass, resolvedCupInsertionSide);
+      const retainingLipEnabled = glass?.retainingLipEnabled ?? true;
+      const retainingLipThicknessMm = Number(
+        Math.max(0, glass?.retainingLipThicknessMm ?? Math.max(defaults.retainingLipMm, 1.2)).toFixed(3)
+      );
       const steppedLargeDiameterMm = toPositive(glass?.largeDiameterMm);
       const steppedSmallDiameterMm = toPositive(glass?.smallDiameterMm);
       const steppedLargeSectionThicknessMm = toPositive(glass?.largeSectionThicknessMm);
@@ -610,6 +793,39 @@ function createPayload(
       const localCupDepthMm = estimateLensCupDepthMm(glass, defaults);
       const seatClearanceMm = defaults.printToleranceMm;
       const resolvedOuterDiameter = cascade.cupOuterDiameterMm;
+      const advancedProfileLengthMm = getAdvancedProfileTotalLengthMm(advancedProfile);
+      const profileLengthMm =
+        (typeof profileDepth === "number" && profileDepth > 0
+          ? profileDepth
+          : advancedProfileLengthMm > 0
+            ? advancedProfileLengthMm
+            : toPositive(glass?.thicknessMm));
+      const retainingSideForGeometry: ResolvedCupRetainingSide =
+        resolvedCupRetainingSide === "none"
+          ? "none"
+          : resolvedCupInsertionSide === "front"
+            ? "rear"
+            : "front";
+      const rearLipMm =
+        retainingLipEnabled && retainingSideForGeometry !== "none" ? retainingLipThicknessMm : 0;
+      const resolvedCupDepthMm = Number(
+        (
+          localCupDepthMm ??
+          Math.max(0.5, profileLengthMm + rearLipMm + 0.5)
+        ).toFixed(3)
+      );
+      const cupOffsetEstimate = estimateCupOffsetsForGlass(glass, defaults);
+      const opticalClearApertureMm = toPositive(glass?.clearApertureMm);
+      const retainingLipInnerDiameterMm = Number(
+        Math.max(
+          0.4,
+          toPositive(glass?.retainingLipInnerDiameterMm) > 0
+            ? (glass?.retainingLipInnerDiameterMm as number)
+            : opticalClearApertureMm > 0
+              ? opticalClearApertureMm + 1.2
+              : Math.max(8, glassDiameterMm - 2.4)
+        ).toFixed(3)
+      );
 
       return {
         type: "element_cup",
@@ -623,9 +839,18 @@ function createPayload(
           seatClearanceMm,
           wallThicknessMm: Number(defaults.wallThicknessMm.toFixed(3)),
           outerDiameterMm: Number(resolvedOuterDiameter.toFixed(3)),
-          retainingLipMm: defaults.retainingLipMm,
+          retainingLipMm: retainingLipEnabled ? retainingLipThicknessMm : 0,
           rearLipMm: Number(rearLipMm.toFixed(3)),
-          cupDepthMm: localCupDepthMm ? Number(localCupDepthMm.toFixed(3)) : undefined,
+          cupInsertionSide: glass?.cupInsertionSide ?? "auto",
+          cupRetainingSide: requestedCupRetainingSide,
+          resolvedCupInsertionSide,
+          resolvedCupRetainingSide: retainingSideForGeometry,
+          retainingLipEnabled,
+          retainingLipThicknessMm,
+          retainingLipInnerDiameterMm,
+          cupFrontOffsetMm: cupOffsetEstimate.cupFrontOffsetMm,
+          cupRearOffsetMm: cupOffsetEstimate.cupRearOffsetMm,
+          cupDepthMm: resolvedCupDepthMm,
           facets: defaults.facets
         }
       };
@@ -642,13 +867,55 @@ function createPayload(
           : toPositive(spacer?.outerDiameterMm) > 0
             ? (spacer?.outerDiameterMm as number)
             : defaults.defaultOuterDiameterMm;
+      const desiredOpticalAirGapMm =
+        getSpacerDesiredOpticalAirGapMm(spacer) > 0
+          ? getSpacerDesiredOpticalAirGapMm(spacer)
+          : defaults.partThicknessMm;
+      const spacerThicknessSource = getSpacerThicknessSource(spacer);
+      const insertedItemsTotalThicknessMm = getSpacerInsertedItemsTotalThicknessMm(spacer);
+      const orderedItems = [...project.stackItems].sort((a, b) => a.positionIndex - b.positionIndex);
+      const spacerIndex = spacer ? orderedItems.findIndex((item) => item.id === spacer.id) : -1;
+      const previousGlass = spacerIndex >= 0 ? getNearestGlassOnSide(orderedItems, spacerIndex, -1) : undefined;
+      const nextGlass = spacerIndex >= 0 ? getNearestGlassOnSide(orderedItems, spacerIndex, 1) : undefined;
+      const previousCupOffsets = estimateCupOffsetsForGlass(previousGlass, defaults);
+      const nextCupOffsets = estimateCupOffsetsForGlass(nextGlass, defaults);
+      const cupOffsetCompensationAvailable = Boolean(previousGlass && nextGlass);
+      const previousCupRearOffsetMm = cupOffsetCompensationAvailable ? previousCupOffsets.cupRearOffsetMm : 0;
+      const nextCupFrontOffsetMm = cupOffsetCompensationAvailable ? nextCupOffsets.cupFrontOffsetMm : 0;
+      const calculatedPhysicalSpacerThicknessMm = Number(
+        (
+          desiredOpticalAirGapMm -
+          previousCupRearOffsetMm -
+          nextCupFrontOffsetMm -
+          insertedItemsTotalThicknessMm
+        ).toFixed(3)
+      );
+      const manualPrintedThicknessMm = getSpacerPrintedThicknessMm(spacer);
+      const resolvedPrintedSpacerThicknessRawMm =
+        spacerThicknessSource === "manual_override"
+          ? (manualPrintedThicknessMm > 0 ? manualPrintedThicknessMm : desiredOpticalAirGapMm)
+          : spacerThicknessSource === "calculated_from_cup_offsets" && cupOffsetCompensationAvailable
+            ? calculatedPhysicalSpacerThicknessMm
+            : desiredOpticalAirGapMm;
+      const resolvedPrintedSpacerThicknessMm = Math.max(0.01, resolvedPrintedSpacerThicknessRawMm);
+
       return {
         type: "spacer_ring",
         params: {
           partName: spacerPartName,
           innerDiameterMm: Number(resolvedSpacerInnerDiameterMm.toFixed(3)),
           outerDiameterMm: Number(resolvedSpacerOuterDiameterMm.toFixed(3)),
-          thicknessMm: spacer?.thicknessMm ?? defaults.partThicknessMm,
+          thicknessMm: Number(resolvedPrintedSpacerThicknessMm.toFixed(3)),
+          desiredOpticalAirGapMm: Number(desiredOpticalAirGapMm.toFixed(3)),
+          physicalSpacerThicknessMm: Number(resolvedPrintedSpacerThicknessRawMm.toFixed(3)),
+          physicalSpacerThicknessSource: spacerThicknessSource,
+          airspaceMeasurementType: spacer?.airspaceMeasurementType ?? "unknown",
+          airspaceConfidence: spacer?.airspaceConfidence ?? "unknown",
+          previousCupRearOffsetMm: Number(previousCupRearOffsetMm.toFixed(3)),
+          nextCupFrontOffsetMm: Number(nextCupFrontOffsetMm.toFixed(3)),
+          insertedItemsTotalThicknessMm: Number(insertedItemsTotalThicknessMm.toFixed(3)),
+          calculatedPhysicalSpacerThicknessMm,
+          spacerThicknessSource: spacerThicknessSource,
           hasAntiReflectionGrooves: Boolean(spacer?.hasAntiReflectionGrooves),
           chamferEnabled: Boolean(spacer?.chamferEnabled),
           chamferMm: spacer?.chamferMm ?? 0.2,
@@ -1133,6 +1400,29 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     if (cupWallThicknessMm < 1.5) {
       warnings.push("Lens cup wall may be too thin.");
     }
+    if (
+      toPositive(payload.params.outerDiameterMm) > 0 &&
+      Math.abs(toPositive(payload.params.outerDiameterMm) - cascadeSizing.targetStackOuterDiameterMm) > 0.01
+    ) {
+      warnings.push("Cup OD does not match target stack outer diameter.");
+    }
+
+    const retainingLipEnabled = payload.params.retainingLipEnabled ?? true;
+    const retainingLipInnerDiameterMm = toPositive(payload.params.retainingLipInnerDiameterMm);
+    if (retainingLipEnabled && retainingLipInnerDiameterMm > 0) {
+      const maxPracticalInner = toPositive(payload.params.glassDiameterMm + payload.params.seatClearanceMm);
+      if (retainingLipInnerDiameterMm >= maxPracticalInner) {
+        warnings.push("Retaining lip inner diameter is too large; no retaining lip remains.");
+      }
+      const sourceGlass = sourceItem?.type === "glass" ? sourceItem : cascadeSizing.sourceGlass;
+      const opticalClearAperture = toPositive(sourceGlass?.clearApertureMm);
+      if (opticalClearAperture > 0 && retainingLipInnerDiameterMm <= opticalClearAperture) {
+        warnings.push("Retaining lip inner diameter should be larger than clear aperture.");
+      }
+      if (opticalClearAperture > 0 && retainingLipInnerDiameterMm < opticalClearAperture + 1.0) {
+        warnings.push("Retaining lip inner diameter may vignette.");
+      }
+    }
 
     if (payload.params.advancedProfile?.enabled) {
       const advanced = payload.params.advancedProfile;
@@ -1141,10 +1431,34 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
         .sort((a, b) => a.index - b.index)
         .filter((section) => section.diameterMm > 0 && section.lengthMm > 0);
       if (!sortedSections.length) return warnings;
-      const lastMeasuredDiameter = sortedSections[sortedSections.length - 1]?.diameterMm ?? advanced.maxDiameterMm;
+      const insertionSide = payload.params.resolvedCupInsertionSide ?? "front";
+      const traversal = insertionSide === "rear" ? sortedSections.slice().reverse() : sortedSections;
+      let maxSectionTraversalIndex = 0;
+      let smallestDelta = Number.POSITIVE_INFINITY;
+      traversal.forEach((section, index) => {
+        const delta = Math.abs(section.diameterMm - advanced.maxDiameterMm);
+        if (delta < smallestDelta) {
+          smallestDelta = delta;
+          maxSectionTraversalIndex = index;
+        }
+      });
+      const hasPreMaxSmallerSection = traversal.some(
+        (section, index) => index < maxSectionTraversalIndex && section.diameterMm < advanced.maxDiameterMm - 0.001
+      );
+      if (hasPreMaxSmallerSection) {
+        warnings.push("Max diameter occurs after a smaller section. Bore before max diameter was enlarged for insertion.");
+        if (insertionSide === "front") {
+          warnings.push("Consider loading this cup from the rear/max-diameter side.");
+        }
+      }
+      const lastMeasuredDiameter = traversal[traversal.length - 1]?.diameterMm ?? advanced.maxDiameterMm;
       const defaultRearClearHole = Math.max(lastMeasuredDiameter - 2.0, 0.4);
       const requestedRearClearHole = Math.max(advanced.rearClearHoleMm ?? defaultRearClearHole, 0.4);
-      const insertionSafeBoreSections = buildInsertionSafeBoreSections(advanced, payload.params.seatClearanceMm);
+      const insertionSafeBoreSections = buildInsertionSafeBoreSections(
+        advanced,
+        payload.params.seatClearanceMm,
+        insertionSide
+      );
       const lastBoreDiameter =
         insertionSafeBoreSections[insertionSafeBoreSections.length - 1]?.diameterMm ??
         advanced.maxDiameterMm + payload.params.seatClearanceMm;
@@ -1153,6 +1467,55 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       }
       if (payload.params.rearLipMm < 0.8) {
         warnings.push("Rear retaining lip may be too thin.");
+      }
+      if (!insertionSafeBoreSections.length) {
+        warnings.push("Cup bore is not insertion-safe from selected insertion side.");
+      }
+      if (
+        payload.params.cupRetainingSide &&
+        payload.params.cupRetainingSide !== "auto" &&
+        payload.params.cupRetainingSide !== payload.params.resolvedCupRetainingSide
+      ) {
+        warnings.push("Requested retaining side is not fully supported by current cup generator; using insertion-safe fallback.");
+      }
+    }
+    return warnings;
+  })();
+  const spacerValidationWarnings = (() => {
+    if (payload.type !== "spacer_ring") return [] as string[];
+    const warnings: string[] = [];
+    const desiredOpticalAirGapMm = toPositive(payload.params.desiredOpticalAirGapMm) || toPositive(payload.params.thicknessMm);
+    const printedSpacerThicknessMm =
+      typeof payload.params.physicalSpacerThicknessMm === "number"
+        ? payload.params.physicalSpacerThicknessMm
+        : payload.params.thicknessMm;
+    const source = payload.params.spacerThicknessSource ?? payload.params.physicalSpacerThicknessSource ?? "same_as_airspace";
+    const previousCupRearOffsetMm = payload.params.previousCupRearOffsetMm ?? 0;
+    const nextCupFrontOffsetMm = payload.params.nextCupFrontOffsetMm ?? 0;
+    const calculatedPhysicalSpacerThicknessMm =
+      payload.params.calculatedPhysicalSpacerThicknessMm ?? printedSpacerThicknessMm;
+
+    if (Math.abs(payload.params.outerDiameterMm - cascadeSizing.targetStackOuterDiameterMm) > 0.01) {
+      warnings.push("Spacer OD does not match target stack outer diameter.");
+    }
+    if (payload.params.outerDiameterMm <= payload.params.innerDiameterMm) {
+      warnings.push("Spacer OD must be larger than spacer ID.");
+    }
+    if (printedSpacerThicknessMm < 0) {
+      warnings.push("Printed spacer thickness is negative.");
+    }
+    if (source === "calculated_from_cup_offsets" && previousCupRearOffsetMm === 0 && nextCupFrontOffsetMm === 0) {
+      warnings.push("Cup offset compensation unavailable; printed spacer equals measured airspace.");
+    }
+    if (calculatedPhysicalSpacerThicknessMm < 0) {
+      warnings.push("Cup lips/offsets exceed desired optical air gap. Reduce lip thickness or change cup design.");
+    }
+    if (desiredOpticalAirGapMm > 0) {
+      const diff = Math.abs(printedSpacerThicknessMm - desiredOpticalAirGapMm);
+      if (diff > 0.2) {
+        warnings.push("Spacer thickness was adjusted to compensate for cup retaining lips.");
+      } else if (diff > 0.001) {
+        warnings.push("Desired optical airspace differs from printed spacer thickness.");
       }
     }
     return warnings;
@@ -1211,6 +1574,14 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     ) {
       warnings.push("Lens cup wall may be too thin.");
     }
+    if (
+      targetStackOuterDiameterMm > 0 &&
+      cascadeSizing.sourceGlassMaxDiameterMm > 0 &&
+      targetStackOuterDiameterMm <
+        cascadeSizing.sourceGlassMaxDiameterMm + cascadeSizing.minimumCupWallThicknessMm * 2
+    ) {
+      warnings.push("Target stack OD is too small for largest glass plus minimum cup wall thickness.");
+    }
     if (cascadeSizing.carrierWallThicknessMm < 1.5) {
       warnings.push("Carrier wall may be too thin.");
     }
@@ -1239,6 +1610,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     ...(sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : []),
     ...autoFitSystemWarnings,
     ...elementCupValidationWarnings,
+    ...spacerValidationWarnings,
     ...slidingCarrierValidationWarnings
   ])];
   const autoFitSystemSpecs = useMemo(() => {
@@ -1278,13 +1650,23 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.outer_diameter = `${pretty(payload.params.outerDiameterMm ?? 0)} mm`;
       values.cup_depth = `${pretty(payload.params.cupDepthMm ?? cascadeSizing.cupDepthMm ?? 0)} mm`;
       values.cup_outer_diameter = `${pretty(payload.params.outerDiameterMm ?? cascadeSizing.cupOuterDiameterMm ?? 0)} mm`;
+      values.cup_insertion_side_requested = payload.params.cupInsertionSide ?? "auto";
+      values.cup_insertion_side_resolved = payload.params.resolvedCupInsertionSide ?? "front";
+      values.cup_retaining_side_requested = payload.params.cupRetainingSide ?? "auto";
+      values.cup_retaining_side_resolved = payload.params.resolvedCupRetainingSide ?? "rear";
+      values.retaining_lip_enabled = payload.params.retainingLipEnabled ?? true;
+      values.retaining_lip_thickness = `${pretty(payload.params.retainingLipThicknessMm ?? payload.params.rearLipMm ?? 0)} mm`;
+      values.retaining_lip_inner_diameter = `${pretty(payload.params.retainingLipInnerDiameterMm ?? 0)} mm`;
+      values.cup_front_offset_mm = `${pretty(payload.params.cupFrontOffsetMm ?? 0)} mm`;
+      values.cup_rear_offset_mm = `${pretty(payload.params.cupRearOffsetMm ?? 0)} mm`;
       values.profile_segments = payload.params.profileSegments?.length ?? 0;
       if (payload.params.advancedProfile?.enabled) {
         const sectionSum = getAdvancedProfileSectionSum(payload.params.advancedProfile);
         const lengthDifference = payload.params.advancedProfile.totalLengthMm - sectionSum;
         const boreSections = buildInsertionSafeBoreSections(
           payload.params.advancedProfile,
-          payload.params.seatClearanceMm
+          payload.params.seatClearanceMm,
+          payload.params.resolvedCupInsertionSide ?? "front"
         );
         values.advanced_profile_enabled = "yes";
         values.totalLengthMm = `${pretty(payload.params.advancedProfile.totalLengthMm)} mm`;
@@ -1312,6 +1694,27 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.target_stack_outer_diameter_source = cascadeSizing.targetStackOuterDiameterSource;
       values.lens_cup_outer_diameter = `${pretty(cascadeSizing.cupOuterDiameterMm ?? cascadeSizing.targetStackOuterDiameterMm)} mm`;
       values.spacer_outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
+      values.desired_optical_air_gap_mm = `${pretty(payload.params.desiredOpticalAirGapMm ?? payload.params.thicknessMm)} mm`;
+      values.printed_spacer_thickness_mm = `${pretty(payload.params.physicalSpacerThicknessMm ?? payload.params.thicknessMm)} mm`;
+      values.spacer_thickness_source =
+        payload.params.spacerThicknessSource ?? payload.params.physicalSpacerThicknessSource ?? "same_as_airspace";
+      values.previous_cup_rear_offset_mm = `${pretty(payload.params.previousCupRearOffsetMm ?? 0)} mm`;
+      values.next_cup_front_offset_mm = `${pretty(payload.params.nextCupFrontOffsetMm ?? 0)} mm`;
+      values.inserted_items_total_thickness_mm = `${pretty(payload.params.insertedItemsTotalThicknessMm ?? 0)} mm`;
+      values.calculated_physical_spacer_thickness_mm = `${pretty(
+        payload.params.calculatedPhysicalSpacerThicknessMm ??
+          payload.params.physicalSpacerThicknessMm ??
+          payload.params.thicknessMm
+      )} mm`;
+      const spacerThicknessSource =
+        payload.params.spacerThicknessSource ?? payload.params.physicalSpacerThicknessSource ?? "same_as_airspace";
+      if (spacerThicknessSource === "same_as_airspace") {
+        values.compensation_note = "No cup offset compensation applied yet.";
+      } else if (spacerThicknessSource === "calculated_from_cup_offsets") {
+        values.compensation_note = "Printed spacer thickness is offset-compensated when cup offsets are available.";
+      } else {
+        values.compensation_note = "Manual spacer thickness override.";
+      }
       values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
       values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
       values.thickness = `${pretty(payload.params.thicknessMm)} mm`;

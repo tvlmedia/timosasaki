@@ -232,6 +232,26 @@ function buildSteppedProfileSegmentsFromFields(
   return generatedFromSteppedFields;
 }
 
+function normalizeAdvancedSections(
+  sections:
+    | Array<{
+        id?: string;
+        index?: number;
+        label?: string;
+        diameterMm?: number;
+        lengthMm?: number;
+      }>
+    | undefined
+): Array<{ id: string; index: number; label?: string; diameterMm: number; lengthMm: number }> {
+  return (sections ?? []).map((section, index) => ({
+    id: section.id || createId("profile"),
+    index,
+    label: section.label,
+    diameterMm: toPositive(section.diameterMm),
+    lengthMm: toPositive(section.lengthMm)
+  }));
+}
+
 function toGlassStackItem(
   annotation: MeasurementAnnotation,
   sourceBaselineComponentId?: string
@@ -240,6 +260,17 @@ function toGlassStackItem(
   const diameterMm = toPositive(fields.diameterMm);
   const thicknessMm = toPositive(fields.thicknessMm);
   const steppedSegments = buildSteppedProfileSegmentsFromFields(fields);
+  const advancedProfile = fields.advancedProfile
+    ? {
+        enabled: Boolean(fields.advancedProfile.enabled),
+        totalLengthMm: toPositive(fields.advancedProfile.totalLengthMm),
+        maxDiameterMm: toPositive(fields.advancedProfile.maxDiameterMm),
+        maxDiameterPositionFromFrontMm: Number.isFinite(fields.advancedProfile.maxDiameterPositionFromFrontMm)
+          ? (fields.advancedProfile.maxDiameterPositionFromFrontMm as number)
+          : 0,
+        sections: normalizeAdvancedSections(fields.advancedProfile.sections)
+      }
+    : undefined;
   if (diameterMm <= 0 || thicknessMm <= 0) return null;
 
   return {
@@ -250,8 +281,21 @@ function toGlassStackItem(
     positionIndex: 0,
     diameterMm,
     thicknessMm,
-    advancedProfileEnabled: steppedSegments.length > 0,
-    profileSegments: steppedSegments.length > 0 ? steppedSegments : undefined,
+    thicknessMeasurementType: fields.thicknessMeasurementType ?? "unknown",
+    thicknessConfidence: fields.thicknessConfidence ?? "unknown",
+    advancedProfile,
+    advancedProfileEnabled: Boolean(advancedProfile?.enabled) || steppedSegments.length > 0,
+    profileSegments:
+      advancedProfile?.enabled && advancedProfile.sections.length > 0
+        ? advancedProfile.sections.map((section, index) => ({
+            id: section.id,
+            name: section.label || `Segment ${index + 1}`,
+            diameterMm: section.diameterMm,
+            depthMm: section.lengthMm
+          }))
+        : steppedSegments.length > 0
+          ? steppedSegments
+          : undefined,
     edgeThicknessMm: toPositive(fields.edgeThicknessMm) > 0 ? fields.edgeThicknessMm : undefined,
     clearApertureMm: toPositive(fields.clearApertureMm) > 0 ? fields.clearApertureMm : undefined,
     flipped: fields.orientation === "flipped",
@@ -283,6 +327,10 @@ function toGlassStackItem(
       ? fields.smallSectionThicknessMm
       : undefined,
     stepDirection: fields.stepDirection,
+    cupInsertionSide: "auto",
+    cupRetainingSide: "auto",
+    retainingLipEnabled: true,
+    retainingLipThicknessMm: 1.2,
     notes: fields.notes?.trim() || undefined
   };
 }
@@ -752,6 +800,7 @@ export function BaselineStackWizard({
           label: `${nodes[index].label} → ${nodes[index + 1].label}`
         }, recommendedBarrelId);
         const baselineGap = baselineGaps[index];
+        const desiredOpticalAirGapMm = Math.max(0, gap.thicknessMm);
         const spacer: StackItem = {
           id: createId("spacer"),
           type: "spacer",
@@ -760,7 +809,14 @@ export function BaselineStackWizard({
           positionIndex: stackItems.length,
           innerDiameterMm: Math.max(0, gap.innerDiameterMm),
           outerDiameterMm: Math.max(0, gap.outerDiameterMm),
-          thicknessMm: Math.max(0, gap.thicknessMm),
+          thicknessMm: desiredOpticalAirGapMm,
+          desiredOpticalAirGapMm,
+          physicalSpacerThicknessMm: desiredOpticalAirGapMm,
+          physicalSpacerThicknessSource: "same_as_airspace",
+          airspaceMeasurementType: "unknown",
+          airspaceConfidence: "unknown",
+          insertedItems: [],
+          insertedItemsTotalThicknessMm: 0,
           autoFitToBarrel: false,
           hasAntiReflectionGrooves: false,
           chamferEnabled: false,
@@ -1041,10 +1097,11 @@ export function BaselineStackWizard({
           {step === 3 && (
             <section className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3">
               <p className="text-sm text-labMuted">
-                Air gaps are physical printable spacer/shim rings in this workflow.
+                AirSpace is the optical/layout target between adjacent elements.
               </p>
               <p className="mt-1 text-xs text-labMuted">
-                Defaults use nearby clear aperture and recommended barrel ID ({formatMm(recommendedBarrelId)}mm).
+                Printed spacer thickness defaults to the same value for now. Defaults use nearby clear aperture and
+                recommended barrel ID ({formatMm(recommendedBarrelId)}mm).
               </p>
               <div className="mt-3 space-y-3">
                 {pairDefinitions.length === 0 && (
@@ -1057,7 +1114,7 @@ export function BaselineStackWizard({
                       <p className="text-sm text-labText">{pair.label}</p>
                       <div className="mt-2 grid gap-2 md:grid-cols-3">
                         <NumberInput
-                          label="Thickness (mm)"
+                          label="Desired optical airspace (mm)"
                           value={gap.thicknessMm}
                           min={0}
                           step="0.01"

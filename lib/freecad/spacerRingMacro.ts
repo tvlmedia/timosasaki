@@ -13,6 +13,9 @@ doc = App.newDocument("${params.partName}")
 inner_diameter = ${params.innerDiameterMm.toFixed(2)}
 outer_diameter = ${params.outerDiameterMm.toFixed(2)}
 thickness = ${params.thicknessMm.toFixed(2)}
+desired_optical_air_gap = ${(params.desiredOpticalAirGapMm ?? params.thicknessMm).toFixed(2)}
+printed_spacer_thickness = ${(params.physicalSpacerThicknessMm ?? params.thicknessMm).toFixed(2)}
+spacer_thickness_source = "${params.spacerThicknessSource ?? params.physicalSpacerThicknessSource ?? "same_as_airspace"}"
 chamfer_enabled = ${params.chamferEnabled ? "True" : "False"}
 chamfer_mm = ${(params.chamferMm ?? 0).toFixed(2)}
 
