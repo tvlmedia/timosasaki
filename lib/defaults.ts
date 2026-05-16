@@ -21,7 +21,7 @@ export const defaultCadDefaults: CadDefaults = {
   plLockingClearanceDiameterMm: 42.0,
   plMainBarrelOuterDiameterMm: 44.0,
   plMainBarrelInnerDiameterMm: 40.0,
-  plMainBarrelLengthMm: 64.0,
+  plMainBarrelLengthMm: 48.0,
   plStepUpStartFromFlangeMm: 12.0,
   plSlotCount: 2,
   plSlotAngleOffsetDeg: 0,

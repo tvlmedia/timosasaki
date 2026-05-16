@@ -461,7 +461,7 @@ function createPayload(
         plStepUpStart
       );
       const mainBarrelLength = Math.max(
-        64.0,
+        0.1,
         plMainBarrelLengthDefault
       );
       const totalLength = Number((stepUpStart + mainBarrelLength).toFixed(3));
@@ -746,6 +746,14 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     (project.cadDefaults.plClearanceOuterDiameterMm as number) <= payload.params.mainBarrelInnerDiameterMm
       ? "PL clearance outer diameter must be larger than barrel inner diameter."
       : null;
+  const fixedPlMainBarrelLengthWarning = (() => {
+    if (payload.type !== "fixed_pl_barrel_with_slots") return null;
+    const slotStartFromMain = payload.params.slotStartFromMainBarrelMm ?? 8.0;
+    const minimumUsefulLength = slotStartFromMain + payload.params.slotLengthMm + 4;
+    return payload.params.mainBarrelLengthMm < minimumUsefulLength
+      ? "Main barrel may be too short for the axial slot travel. Increase barrel length or reduce slot length."
+      : null;
+  })();
   const slidingCarrierValidationWarnings = (() => {
     if (payload.type !== "sliding_optical_carrier") return [] as string[];
     const fixedBarrelInnerDiameter = Math.max(
@@ -785,10 +793,12 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       ? [
           "OpenSCAD fixed-PL barrel can include an imported PL STL reference under the barrel.",
           "If the PL shape is missing, verify pl_reference_stl_path points to a valid local STL file.",
-          "For exact STEP alignment + full assembly workflow, use FreeCAD Assembly Macro with PL STEP."
+          "For exact STEP alignment + full assembly workflow, use FreeCAD Assembly Macro with PL STEP.",
+          "Main barrel length should usually be slot start + slot length + a few mm of end margin. For the default 8mm start and 32mm slot, 48mm is a good prototype length."
         ]
       : []),
-    ...(fixedPlClearanceValidationWarning ? [fixedPlClearanceValidationWarning] : [])
+    ...(fixedPlClearanceValidationWarning ? [fixedPlClearanceValidationWarning] : []),
+    ...(fixedPlMainBarrelLengthWarning ? [fixedPlMainBarrelLengthWarning] : [])
   ];
   const partWarnings = [
     ...(sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : []),
