@@ -150,12 +150,13 @@ export function normalizeProject(project: LensProject): LensProject {
         if (base.type === "spacer") {
           const mode =
             base.spacerDiameterMode === "match_lens_cups" ||
-            base.spacerDiameterMode === "match_carrier" ||
             base.spacerDiameterMode === "manual"
               ? base.spacerDiameterMode
-              : base.autoFitToBarrel === false
-                ? "manual"
-                : "match_lens_cups";
+              : base.spacerDiameterMode === "match_carrier"
+                ? "match_lens_cups"
+                : base.autoFitToBarrel === false
+                  ? "manual"
+                  : "match_lens_cups";
           return {
             ...base,
             autoFitToBarrel: mode !== "manual",

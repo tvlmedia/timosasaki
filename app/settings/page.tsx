@@ -79,6 +79,91 @@ export default function SettingsPage() {
             }}
           />
           <NumberInput
+            label="Carrier inner diameter override (mm, 0 = auto)"
+            value={defaults.carrierInnerDiameterMm ?? 0}
+            min={0}
+            step={0.01}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setDefaults((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      carrierInnerDiameterMm: Number.isFinite(next) && next > 0 ? next : undefined
+                    }
+                  : prev
+              );
+            }}
+          />
+          <NumberInput
+            label="Carrier wall thickness override (mm, 0 = auto)"
+            value={defaults.carrierWallThicknessMm ?? 0}
+            min={0}
+            step={0.01}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setDefaults((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      carrierWallThicknessMm: Number.isFinite(next) && next > 0 ? next : undefined
+                    }
+                  : prev
+              );
+            }}
+          />
+          <NumberInput
+            label="Carrier-to-barrel clearance override (mm, 0 = auto)"
+            value={defaults.carrierToBarrelClearanceMm ?? 0}
+            min={0}
+            step={0.01}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setDefaults((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      carrierToBarrelClearanceMm: Number.isFinite(next) && next > 0 ? next : undefined
+                    }
+                  : prev
+              );
+            }}
+          />
+          <NumberInput
+            label="Fixed barrel inner diameter override (mm, 0 = auto)"
+            value={defaults.fixedBarrelInnerDiameterMm ?? 0}
+            min={0}
+            step={0.01}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setDefaults((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      fixedBarrelInnerDiameterMm: Number.isFinite(next) && next > 0 ? next : undefined
+                    }
+                  : prev
+              );
+            }}
+          />
+          <NumberInput
+            label="Fixed barrel wall thickness override (mm, 0 = auto)"
+            value={defaults.fixedBarrelWallThicknessMm ?? 0}
+            min={0}
+            step={0.01}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setDefaults((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      fixedBarrelWallThicknessMm: Number.isFinite(next) && next > 0 ? next : undefined
+                    }
+                  : prev
+              );
+            }}
+          />
+          <NumberInput
             label="Retaining lip (mm)"
             value={defaults.retainingLipMm}
             min={0}

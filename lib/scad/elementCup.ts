@@ -102,7 +102,7 @@ function generateAdvancedProfileScad(params: ElementCupParams): string {
   const lengthDifferenceMm = advanced.totalLengthMm - sectionSumMm;
   const extraDepthMm = Math.max((params.cupDepthMm ?? sectionSumMm + rearLipMm + 0.5) - (sectionSumMm + rearLipMm), 0);
   const cupDepthMm = sectionSumMm + rearLipMm + extraDepthMm;
-  const outerDiameterMm = maxDiameterMm + seatClearanceMm + wallThicknessMm * 2;
+  const outerDiameterMm = params.outerDiameterMm ?? maxDiameterMm + seatClearanceMm + wallThicknessMm * 2;
 
   const lastMeasuredDiameter = sections[sections.length - 1]?.diameterMm ?? maxDiameterMm;
   const defaultRearClearHoleMm = Math.max(lastMeasuredDiameter - 2, 0.4);

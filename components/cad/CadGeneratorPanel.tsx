@@ -73,26 +73,32 @@ type SlidingCarrierOverrides = {
   manualLengthMm: number;
 };
 
-type CarrierLengthDerivedSource = "manual" | "cup_depth" | "optical_stack_length";
-type CarrierInnerBaseSource = "cup_outer_diameter" | "largest_glass_diameter";
+type CarrierLengthDerivedSource = "manual" | "optical_stack_length";
 type SlotLengthSource = "focus_travel" | "manual_default";
 
 type CascadeSizing = {
   sourceGlass?: Extract<StackItem, { type: "glass" }>;
   sourceGlassMaxDiameterMm: number;
+  opticalStackLengthMm: number;
   cupDepthMm?: number;
-  cupOuterDiameterMm?: number;
+  cupOuterDiameterMm: number;
+  minimumCupWallThicknessMm: number;
   cupToCarrierClearanceMm: number;
   targetStackOuterDiameterMm: number;
-  targetStackOuterDiameterSource: "manual" | "carrier_inner" | "fixed_barrel_inner" | "largest_glass_fallback";
+  targetStackOuterDiameterSource: "manual" | "largest_glass_auto";
   carrierLengthMm: number;
   carrierLengthSource: CarrierLengthDerivedSource;
   carrierInnerDiameterMm: number;
-  carrierInnerBaseSource: CarrierInnerBaseSource;
+  carrierInnerDiameterSource: "manual" | "auto";
+  carrierWallThicknessMm: number;
+  carrierWallThicknessSource: "manual" | "auto";
   carrierOuterDiameterMm: number;
-  carrierFitClearanceMm: number;
+  carrierToBarrelClearanceMm: number;
   fixedBarrelInnerDiameterMm: number;
-  slidingClearanceMm: number;
+  fixedBarrelInnerDiameterSource: "manual" | "auto";
+  fixedBarrelWallThicknessMm: number;
+  fixedBarrelWallThicknessSource: "manual" | "auto";
+  fixedBarrelOuterDiameterMm: number;
   slotLengthMm: number;
   slotLengthSource: SlotLengthSource;
   slotStartFromMainBarrelMm: number;
@@ -101,13 +107,20 @@ type CascadeSizing = {
 };
 
 const CARRIER_LENGTH_MARGIN_MM = 3.0;
-const MIN_CARRIER_LENGTH_MM = 18.0;
-const MAX_CARRIER_LENGTH_MM = 120.0;
-const MIN_CARRIER_FIT_CLEARANCE_DIAMETER_MM = 0.6;
-const DEFAULT_SLIDING_CLEARANCE_DIAMETER_MM = 0.8;
+const DEFAULT_CARRIER_TO_BARREL_CLEARANCE_MM = 0.8;
 const DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM = 0.6;
-const DEFAULT_BARREL_END_MARGIN_MM = 8.0;
-const MIN_CUP_WALL_THICKNESS_MM = 1.2;
+const DEFAULT_CARRIER_WALL_THICKNESS_MM = 2.0;
+const DEFAULT_FIXED_BARREL_WALL_THICKNESS_MM = 2.0;
+const DEFAULT_BARREL_END_MARGIN_MM = 6.0;
+const DEFAULT_MINIMUM_CUP_WALL_THICKNESS_MM = 2.0;
+const DEFAULT_SHARED_STACK_ROUNDING_INCREMENT_MM = 0.5;
+const DEFAULT_SLOT_LENGTH_WITHOUT_FOCUS_TRAVEL_MM = 32.0;
+
+function roundUpToIncrement(value: number, increment: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  if (!Number.isFinite(increment) || increment <= 0) return value;
+  return Math.ceil(value / increment) * increment;
+}
 
 function toFiniteOrUndefined(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -245,11 +258,7 @@ function getMeasuredGlassMaxDiameterMm(glass?: Extract<StackItem, { type: "glass
   return Math.max(0, ...candidates);
 }
 
-function resolveCascadeSourceGlass(
-  project: LensProject,
-  preferredSource?: StackItem
-): Extract<StackItem, { type: "glass" }> | undefined {
-  if (preferredSource?.type === "glass") return preferredSource;
+function resolveCascadeSourceGlass(project: LensProject): Extract<StackItem, { type: "glass" }> | undefined {
   const glasses = project.stackItems.filter(
     (item): item is Extract<StackItem, { type: "glass" }> => item.type === "glass"
   );
@@ -311,15 +320,11 @@ function estimateLensCupDepthMm(
 
 function resolveSlidingCarrierLengthMm({
   project,
-  sourceGlass,
-  defaults,
   fallbackLengthMm,
   lengthSource,
   manualLengthMm
 }: {
   project: LensProject;
-  sourceGlass: Extract<StackItem, { type: "glass" }> | undefined;
-  defaults: CadDefaults;
   fallbackLengthMm: number;
   lengthSource: SlidingCarrierLengthSource;
   manualLengthMm: number;
@@ -329,17 +334,10 @@ function resolveSlidingCarrierLengthMm({
     return { lengthMm: Number(Math.max(8, manual).toFixed(3)), source: "manual" };
   }
 
-  const cupDepthMm = estimateLensCupDepthMm(sourceGlass, defaults);
-  if (cupDepthMm && cupDepthMm > 0) {
-    return {
-      lengthMm: Number(Math.max(MIN_CARRIER_LENGTH_MM, Math.min(cupDepthMm + CARRIER_LENGTH_MARGIN_MM, MAX_CARRIER_LENGTH_MM)).toFixed(3)),
-      source: "cup_depth"
-    };
-  }
   const stackLengthMm = getTotalStackLength(project.stackItems);
   if (stackLengthMm > 0) {
     return {
-      lengthMm: Number(Math.max(MIN_CARRIER_LENGTH_MM, Math.min(stackLengthMm + CARRIER_LENGTH_MARGIN_MM, MAX_CARRIER_LENGTH_MM)).toFixed(3)),
+      lengthMm: Number(Math.max(8, stackLengthMm + CARRIER_LENGTH_MARGIN_MM).toFixed(3)),
       source: "optical_stack_length"
     };
   }
@@ -349,119 +347,132 @@ function resolveSlidingCarrierLengthMm({
 
 function deriveCascadeSizing({
   project,
-  preferredSource,
   defaults,
   focusDerived,
-  plSlotLengthManual,
   slidingCarrierOverrides
 }: {
   project: LensProject;
-  preferredSource?: StackItem;
   defaults: CadDefaults;
   focusDerived: ReturnType<typeof getFocusTravelDerived>;
-  plSlotLengthManual: number;
   slidingCarrierOverrides?: SlidingCarrierOverrides;
 }): CascadeSizing {
-  const sourceGlass = resolveCascadeSourceGlass(project, preferredSource);
+  const sourceGlass = resolveCascadeSourceGlass(project);
   const measuredSourceGlassMaxDiameter = getMeasuredGlassMaxDiameterMm(sourceGlass);
   const fallbackLargestGlassDiameter = getLargestGlassDiameter(project.stackItems);
   const sourceGlassMaxDiameterMm =
     measuredSourceGlassMaxDiameter > 0 ? measuredSourceGlassMaxDiameter : fallbackLargestGlassDiameter;
+  const opticalStackLengthMm = getTotalStackLength(project.stackItems);
 
   const cupDepthMm = estimateLensCupDepthMm(sourceGlass, defaults);
-  const localCupOuterDiameterMm =
-    sourceGlassMaxDiameterMm > 0
-      ? Number((sourceGlassMaxDiameterMm + defaults.wallThicknessMm * 2).toFixed(3))
-      : undefined;
+  const minimumCupWallThicknessMm = DEFAULT_MINIMUM_CUP_WALL_THICKNESS_MM;
+  const manualTargetStackOuterDiameterMm = toPositive(defaults.targetStackOuterDiameterMm);
+  const autoTargetStackOuterDiameterMm = roundUpToIncrement(
+    Math.max(4, sourceGlassMaxDiameterMm + minimumCupWallThicknessMm * 2),
+    DEFAULT_SHARED_STACK_ROUNDING_INCREMENT_MM
+  );
+  const targetStackOuterDiameterSource: CascadeSizing["targetStackOuterDiameterSource"] =
+    manualTargetStackOuterDiameterMm > 0 ? "manual" : "largest_glass_auto";
+  const targetStackOuterDiameterMm = Number(
+    Math.max(4, manualTargetStackOuterDiameterMm > 0 ? manualTargetStackOuterDiameterMm : autoTargetStackOuterDiameterMm).toFixed(3)
+  );
+  const cupOuterDiameterMm = targetStackOuterDiameterMm;
 
-  const focusTravelMm = focusDerived.recommendedPrototypeTravelMm ?? plSlotLengthManual;
+  const cupToCarrierClearanceMm = Number(
+    Math.max(0, defaults.cupToCarrierClearanceMm ?? DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM).toFixed(3)
+  );
+  const manualCarrierInnerDiameterMm = toPositive(defaults.carrierInnerDiameterMm);
+  const carrierInnerDiameterSource: CascadeSizing["carrierInnerDiameterSource"] =
+    manualCarrierInnerDiameterMm > 0 ? "manual" : "auto";
+  const carrierInnerDiameterMm = Number(
+    (
+      manualCarrierInnerDiameterMm > 0
+        ? manualCarrierInnerDiameterMm
+        : targetStackOuterDiameterMm + cupToCarrierClearanceMm
+    ).toFixed(3)
+  );
+  const manualCarrierWallThicknessMm = toPositive(defaults.carrierWallThicknessMm);
+  const carrierWallThicknessSource: CascadeSizing["carrierWallThicknessSource"] =
+    manualCarrierWallThicknessMm > 0 ? "manual" : "auto";
+  const carrierWallThicknessMm = Number(
+    (
+      manualCarrierWallThicknessMm > 0
+        ? manualCarrierWallThicknessMm
+        : DEFAULT_CARRIER_WALL_THICKNESS_MM
+    ).toFixed(3)
+  );
+  const carrierOuterDiameterMm = Number((carrierInnerDiameterMm + carrierWallThicknessMm * 2).toFixed(3));
+
+  const carrierToBarrelClearanceMm = Number(
+    Math.max(0, defaults.carrierToBarrelClearanceMm ?? DEFAULT_CARRIER_TO_BARREL_CLEARANCE_MM).toFixed(3)
+  );
+  const manualFixedBarrelInnerDiameterMm = toPositive(defaults.fixedBarrelInnerDiameterMm);
+  const fixedBarrelInnerDiameterSource: CascadeSizing["fixedBarrelInnerDiameterSource"] =
+    manualFixedBarrelInnerDiameterMm > 0 ? "manual" : "auto";
+  const fixedBarrelInnerDiameterMm = Number(
+    (
+      manualFixedBarrelInnerDiameterMm > 0
+        ? manualFixedBarrelInnerDiameterMm
+        : carrierOuterDiameterMm + carrierToBarrelClearanceMm
+    ).toFixed(3)
+  );
+  const manualFixedBarrelWallThicknessMm = toPositive(defaults.fixedBarrelWallThicknessMm);
+  const fixedBarrelWallThicknessSource: CascadeSizing["fixedBarrelWallThicknessSource"] =
+    manualFixedBarrelWallThicknessMm > 0 ? "manual" : "auto";
+  const fixedBarrelWallThicknessMm = Number(
+    (
+      manualFixedBarrelWallThicknessMm > 0
+        ? manualFixedBarrelWallThicknessMm
+        : DEFAULT_FIXED_BARREL_WALL_THICKNESS_MM
+    ).toFixed(3)
+  );
+  const fixedBarrelOuterDiameterMm = Number((fixedBarrelInnerDiameterMm + fixedBarrelWallThicknessMm * 2).toFixed(3));
+
+  const focusTravelMm = focusDerived.recommendedPrototypeTravelMm;
   const carrierLengthResolved = resolveSlidingCarrierLengthMm({
     project,
-    sourceGlass,
-    defaults,
-    fallbackLengthMm: slidingCarrierOverrides?.manualLengthMm ?? focusTravelMm,
+    fallbackLengthMm: slidingCarrierOverrides?.manualLengthMm ?? focusTravelMm ?? 48,
     lengthSource: slidingCarrierOverrides?.lengthSource ?? "lens_cup_or_stack",
     manualLengthMm: slidingCarrierOverrides?.manualLengthMm ?? 48
   });
-
-  const carrierInnerBaseSource: CarrierInnerBaseSource =
-    localCupOuterDiameterMm && localCupOuterDiameterMm > 0 ? "cup_outer_diameter" : "largest_glass_diameter";
-  const carrierInnerBaseDiameter =
-    carrierInnerBaseSource === "cup_outer_diameter"
-      ? (localCupOuterDiameterMm as number)
-      : sourceGlassMaxDiameterMm;
-  const carrierFitClearanceMm = Math.max(
-    MIN_CARRIER_FIT_CLEARANCE_DIAMETER_MM,
-    (defaults.radialClearanceMm + defaults.printToleranceMm) * 2
-  );
-  const carrierInnerDiameterMm = Number(
-    Math.max(carrierInnerBaseDiameter + carrierFitClearanceMm, defaults.defaultInnerDiameterMm - 2).toFixed(3)
-  );
-  const carrierOuterDiameterMm = Number((carrierInnerDiameterMm + defaults.wallThicknessMm * 2).toFixed(3));
-
-  const slidingClearanceMm = DEFAULT_SLIDING_CLEARANCE_DIAMETER_MM;
-  const fixedBarrelInnerDiameterMm = Number((carrierOuterDiameterMm + slidingClearanceMm).toFixed(3));
-  const cupToCarrierClearanceMm = Math.max(0, defaults.cupToCarrierClearanceMm ?? DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM);
-  const manualTargetStackOuterDiameterMm = toPositive(defaults.targetStackOuterDiameterMm);
-  const fixedBarrelInnerCandidateMm = Math.max(
-    fixedBarrelInnerDiameterMm,
-    toPositive(defaults.plMainBarrelInnerDiameterMm)
-  );
-  const computedTargetStackFromCarrierMm = carrierInnerDiameterMm - cupToCarrierClearanceMm;
-  const computedTargetStackFromFixedBarrelMm =
-    fixedBarrelInnerCandidateMm - slidingClearanceMm - cupToCarrierClearanceMm;
-  const fallbackTargetStackOuterDiameterMm = sourceGlassMaxDiameterMm > 0 ? sourceGlassMaxDiameterMm + 6.0 : 0;
-
-  let targetStackOuterDiameterSource: CascadeSizing["targetStackOuterDiameterSource"];
-  let targetStackOuterDiameterMmRaw = 0;
-  if (manualTargetStackOuterDiameterMm > 0) {
-    targetStackOuterDiameterSource = "manual";
-    targetStackOuterDiameterMmRaw = manualTargetStackOuterDiameterMm;
-  } else if (computedTargetStackFromCarrierMm > 0) {
-    targetStackOuterDiameterSource = "carrier_inner";
-    targetStackOuterDiameterMmRaw = computedTargetStackFromCarrierMm;
-  } else if (computedTargetStackFromFixedBarrelMm > 0) {
-    targetStackOuterDiameterSource = "fixed_barrel_inner";
-    targetStackOuterDiameterMmRaw = computedTargetStackFromFixedBarrelMm;
-  } else {
-    targetStackOuterDiameterSource = "largest_glass_fallback";
-    targetStackOuterDiameterMmRaw = fallbackTargetStackOuterDiameterMm;
-  }
-  const targetStackOuterDiameterMm = Number(Math.max(4, targetStackOuterDiameterMmRaw).toFixed(3));
-  const cupOuterDiameterMm = targetStackOuterDiameterMm;
 
   const slotLengthSource: SlotLengthSource =
     focusDerived.recommendedPrototypeTravelMm && focusDerived.recommendedPrototypeTravelMm > 0
       ? "focus_travel"
       : "manual_default";
-  const slotLengthBase = focusDerived.recommendedPrototypeTravelMm ?? plSlotLengthManual;
-  const slotLengthMm = Number(Math.max(slotLengthBase + 2, 6).toFixed(3));
+  const slotLengthMm = Number(
+    (
+      focusDerived.recommendedPrototypeTravelMm && focusDerived.recommendedPrototypeTravelMm > 0
+        ? focusDerived.recommendedPrototypeTravelMm + 2.0
+        : DEFAULT_SLOT_LENGTH_WITHOUT_FOCUS_TRAVEL_MM
+    ).toFixed(3)
+  );
   const slotStartFromMainBarrelMm = Math.max(0, defaults.plSlotStartFromMainBarrelMm ?? 8.0);
   const barrelEndMarginMm = DEFAULT_BARREL_END_MARGIN_MM;
-  const derivedMainBarrelLengthMm = slotStartFromMainBarrelMm + slotLengthMm + barrelEndMarginMm;
-  const requestedMainBarrelLengthMm = Number.isFinite(defaults.plMainBarrelLengthMm ?? Number.NaN)
-    ? (defaults.plMainBarrelLengthMm as number)
-    : undefined;
-  const mainBarrelLengthMm = Number(
-    Math.max(derivedMainBarrelLengthMm, requestedMainBarrelLengthMm ?? derivedMainBarrelLengthMm).toFixed(3)
-  );
+  const mainBarrelLengthMm = Number((slotStartFromMainBarrelMm + slotLengthMm + barrelEndMarginMm).toFixed(3));
 
   return {
     sourceGlass,
     sourceGlassMaxDiameterMm,
+    opticalStackLengthMm,
     cupDepthMm,
     cupOuterDiameterMm,
+    minimumCupWallThicknessMm,
     cupToCarrierClearanceMm,
     targetStackOuterDiameterMm,
     targetStackOuterDiameterSource,
     carrierLengthMm: carrierLengthResolved.lengthMm,
     carrierLengthSource: carrierLengthResolved.source,
     carrierInnerDiameterMm,
-    carrierInnerBaseSource,
+    carrierInnerDiameterSource,
+    carrierWallThicknessMm,
+    carrierWallThicknessSource,
     carrierOuterDiameterMm,
-    carrierFitClearanceMm,
+    carrierToBarrelClearanceMm,
     fixedBarrelInnerDiameterMm,
-    slidingClearanceMm,
+    fixedBarrelInnerDiameterSource,
+    fixedBarrelWallThicknessMm,
+    fixedBarrelWallThicknessSource,
+    fixedBarrelOuterDiameterMm,
     slotLengthMm,
     slotLengthSource,
     slotStartFromMainBarrelMm,
@@ -536,11 +547,9 @@ function createPayload(
   const plRearNeckLength = defaults.plRearNeckLengthMm ?? 12.0;
   const plLockClearanceLength = defaults.plLockingClearanceLengthMm ?? 12.0;
   const plLockClearanceDiameter = defaults.plLockingClearanceDiameterMm ?? 42.0;
-  const plMainBarrelInnerDefault = defaults.plMainBarrelInnerDiameterMm ?? 40.0;
   const plStepUpStart = defaults.plStepUpStartFromFlangeMm ?? 12.0;
   const plSlotCount = Math.max(2, Math.round(defaults.plSlotCount ?? 2));
   const plSlotAngleOffset = defaults.plSlotAngleOffsetDeg ?? 0;
-  const plSlotLengthManual = defaults.plSlotLengthManualMm ?? 30.0;
   const plSlotStartZ = defaults.plSlotStartZMm ?? 13.0;
   const plPinDiameter = Math.max(1, defaults.plPinDiameterMm ?? defaults.camPinDiameterMm ?? 2);
   const plPinClearance = Math.max(0.1, defaults.plPinClearanceMm ?? 0.3);
@@ -548,10 +557,8 @@ function createPayload(
     cascadeSizing ??
     deriveCascadeSizing({
       project,
-      preferredSource: source,
       defaults,
       focusDerived,
-      plSlotLengthManual,
       slidingCarrierOverrides
     });
 
@@ -595,13 +602,14 @@ function createPayload(
         profileSegments.length > 0
           ? profileSegments.reduce((sum, segment) => sum + segment.depthMm, 0)
           : undefined;
+      const localGlassMaxDiameterMm = getMeasuredGlassMaxDiameterMm(glass);
       const glassDiameterMm =
-        cascade.sourceGlassMaxDiameterMm > 0 ? cascade.sourceGlassMaxDiameterMm : (glass?.diameterMm ?? defaults.defaultInnerDiameterMm - 4);
+        localGlassMaxDiameterMm > 0
+          ? localGlassMaxDiameterMm
+          : glass?.diameterMm ?? cascade.sourceGlassMaxDiameterMm ?? defaults.defaultInnerDiameterMm - 4;
+      const localCupDepthMm = estimateLensCupDepthMm(glass, defaults);
       const seatClearanceMm = defaults.printToleranceMm;
-      const resolvedOuterDiameter =
-        cascade.cupOuterDiameterMm && cascade.cupOuterDiameterMm > 0
-          ? cascade.cupOuterDiameterMm
-          : Number((glassDiameterMm + defaults.wallThicknessMm * 2).toFixed(3));
+      const resolvedOuterDiameter = cascade.cupOuterDiameterMm;
 
       return {
         type: "element_cup",
@@ -617,7 +625,7 @@ function createPayload(
           outerDiameterMm: Number(resolvedOuterDiameter.toFixed(3)),
           retainingLipMm: defaults.retainingLipMm,
           rearLipMm: Number(rearLipMm.toFixed(3)),
-          cupDepthMm: cascade.cupDepthMm ? Number(cascade.cupDepthMm.toFixed(3)) : undefined,
+          cupDepthMm: localCupDepthMm ? Number(localCupDepthMm.toFixed(3)) : undefined,
           facets: defaults.facets
         }
       };
@@ -625,8 +633,7 @@ function createPayload(
     case "spacer_ring": {
       const spacer = source?.type === "spacer" ? source : undefined;
       const spacerPartName = `spacer_air_gap_${safeFileName(sourceName || "ring")}`;
-      const sourceClearApertureMm = toPositive(cascade.sourceGlass?.clearApertureMm);
-      const defaultSpacerInnerDiameterMm = sourceClearApertureMm > 0 ? sourceClearApertureMm + 2.0 : 30.0;
+      const defaultSpacerInnerDiameterMm = 30.0;
       const resolvedSpacerInnerDiameterMm =
         toPositive(spacer?.innerDiameterMm) > 0 ? (spacer?.innerDiameterMm as number) : defaultSpacerInnerDiameterMm;
       const resolvedSpacerOuterDiameterMm =
@@ -701,22 +708,8 @@ function createPayload(
       };
     }
     case "fixed_pl_barrel_with_slots": {
-      const requestedMainBarrelInner = Number.isFinite(defaults.plMainBarrelInnerDiameterMm ?? Number.NaN)
-        ? (defaults.plMainBarrelInnerDiameterMm as number)
-        : undefined;
-      const mainBarrelInner = Math.max(
-        plMainBarrelInnerDefault,
-        cascade.fixedBarrelInnerDiameterMm,
-        requestedMainBarrelInner ?? 0
-      );
-      const defaultMainBarrelOuter = Number((mainBarrelInner + 4.0).toFixed(3));
-      const requestedMainBarrelOuter = Number.isFinite(defaults.plMainBarrelOuterDiameterMm ?? Number.NaN)
-        ? (defaults.plMainBarrelOuterDiameterMm as number)
-        : undefined;
-      const mainBarrelOuter =
-        typeof requestedMainBarrelOuter === "number" && requestedMainBarrelOuter > mainBarrelInner
-          ? Number(requestedMainBarrelOuter.toFixed(3))
-          : defaultMainBarrelOuter;
+      const mainBarrelInner = cascade.fixedBarrelInnerDiameterMm;
+      const mainBarrelOuter = cascade.fixedBarrelOuterDiameterMm;
       const pinDiameter = plPinDiameter;
       const pinClearance = plPinClearance;
       const slotWidth = Number((pinDiameter + pinClearance).toFixed(3));
@@ -734,20 +727,17 @@ function createPayload(
       );
       const plClearanceLength = Math.max(0.1, defaults.plClearanceLengthMm ?? 4.0);
       const slotStartFromMainBarrel = cascade.slotStartFromMainBarrelMm;
-      const stepUpStart = Math.max(
-        plLockClearanceLength,
-        plStepUpStart
-      );
+      const stepUpStart = Math.max(plLockClearanceLength, plStepUpStart);
       const plInterfaceOuterDiameter = Math.max(1, defaults.plInterfaceOuterDiameterMm ?? 54.9);
       const connectorDiscEnabledByFit = mainBarrelOuter < plInterfaceOuterDiameter;
-      const connectorDiscEnabled = defaults.connectorDiscEnabled ?? connectorDiscEnabledByFit;
+      const connectorDiscEnabled = connectorDiscEnabledByFit || (defaults.connectorDiscEnabled ?? true);
       const connectorDiscThickness = Math.max(0, defaults.connectorDiscThicknessMm ?? 0.8);
       const connectorOverlapIntoPl = Math.max(0, defaults.connectorOverlapIntoPlMm ?? 0.8);
       const barrelToDiscOverlap = Math.max(
         0,
         defaults.barrelToDiscOverlapMm ?? defaults.connectorDiscOverlapWithBarrelMm ?? 0.4
       );
-      const connectorDiscOuterDiameterDefault = Math.max(plInterfaceOuterDiameter, mainBarrelOuter);
+      const connectorDiscOuterDiameterDefault = plInterfaceOuterDiameter;
       const connectorDiscOuterDiameter = Math.max(
         mainBarrelOuter,
         Number.isFinite(defaults.connectorDiscOuterDiameterMm ?? Number.NaN)
@@ -956,7 +946,6 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const plAssemblyFuse = project.cadDefaults.plAssemblyFuseBarrelToPl ?? false;
   const plStepReferencePath = resolvePlStepPath(project.cadDefaults.plStepReferencePath);
   const focusDerived = getFocusTravelDerived(project);
-  const plSlotLengthManual = project.cadDefaults.plSlotLengthManualMm ?? 30.0;
 
   const sourceCandidates = useMemo(() => {
     const requiredType = needsSource[partType];
@@ -984,10 +973,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   };
   const cascadeSizing = deriveCascadeSizing({
     project,
-    preferredSource: sourceItem,
     defaults: project.cadDefaults,
     focusDerived,
-    plSlotLengthManual,
     slidingCarrierOverrides
   });
   const fixedPlOverrides =
@@ -1069,7 +1056,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const fixedPlMainBarrelLengthWarning = (() => {
     if (payload.type !== "fixed_pl_barrel_with_slots") return null;
     const slotStartFromMain = payload.params.slotStartFromMainBarrelMm ?? 8.0;
-    const minimumUsefulLength = slotStartFromMain + payload.params.slotLengthMm + 4;
+    const minimumUsefulLength = slotStartFromMain + payload.params.slotLengthMm + 6;
     return payload.params.mainBarrelLengthMm < minimumUsefulLength
       ? "Main barrel may be too short for the axial slot travel. Increase barrel length or reduce slot length."
       : null;
@@ -1096,10 +1083,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   })();
   const slidingCarrierValidationWarnings = (() => {
     if (payload.type !== "sliding_optical_carrier") return [] as string[];
-    const fixedBarrelInnerDiameter = Math.max(
-      cascadeSizing.fixedBarrelInnerDiameterMm,
-      project.cadDefaults.plMainBarrelInnerDiameterMm ?? 0
-    );
+    const fixedBarrelInnerDiameter = cascadeSizing.fixedBarrelInnerDiameterMm;
     const warnings: string[] = [];
     if (payload.params.addPinBosses) {
       warnings.push("External pin bosses may prevent the carrier from sliding inside the fixed barrel.");
@@ -1116,10 +1100,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       );
     }
     const wallThickness = (payload.params.outerDiameterMm - payload.params.innerDiameterMm) / 2;
-    if (wallThickness < 1.2) {
-      warnings.push(
-        "Carrier wall is very thin for pin holes and may break. Increase barrel ID, reduce carrier ID, or use a larger outer carrier."
-      );
+    if (wallThickness < 1.5) {
+      warnings.push("Carrier wall may be too thin.");
     }
     const retainingLipEnabled = payload.params.retainingLipEnabled ?? true;
     if (retainingLipEnabled) {
@@ -1147,10 +1129,9 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const elementCupValidationWarnings = (() => {
     if (payload.type !== "element_cup") return [] as string[];
     const warnings: string[] = [];
-    const targetStackOuterDiameterMm = toPositive(cascadeSizing.targetStackOuterDiameterMm);
-    const minimumCupOuterDiameterMm = payload.params.glassDiameterMm + MIN_CUP_WALL_THICKNESS_MM * 2;
-    if (targetStackOuterDiameterMm > 0 && targetStackOuterDiameterMm <= minimumCupOuterDiameterMm) {
-      warnings.push("Target stack OD is too small for this glass/cup wall thickness.");
+    const cupWallThicknessMm = ((payload.params.outerDiameterMm ?? 0) - payload.params.glassDiameterMm) / 2;
+    if (cupWallThicknessMm < 1.5) {
+      warnings.push("Lens cup wall may be too thin.");
     }
 
     if (payload.params.advancedProfile?.enabled) {
@@ -1176,6 +1157,65 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     }
     return warnings;
   })();
+  const autoFitSystemWarnings = (() => {
+    const warnings: string[] = [];
+    const targetStackOuterDiameterMm = toPositive(cascadeSizing.targetStackOuterDiameterMm);
+    const toleranceMm = 0.01;
+    const glasses = project.stackItems.filter(
+      (item): item is Extract<StackItem, { type: "glass" }> => item.type === "glass"
+    );
+    const spacers = project.stackItems.filter(
+      (item): item is Extract<StackItem, { type: "spacer" }> => item.type === "spacer"
+    );
+
+    const lensCupOuterDiameters = glasses.map((glass) => {
+      const cupPayload = createPayload(
+        project,
+        "element_cup",
+        glass,
+        undefined,
+        slidingCarrierOverrides,
+        cascadeSizing
+      );
+      return cupPayload.type === "element_cup" ? toPositive(cupPayload.params.outerDiameterMm) : 0;
+    });
+    if (
+      targetStackOuterDiameterMm > 0 &&
+      lensCupOuterDiameters.some((outerDiameterMm) => Math.abs(outerDiameterMm - targetStackOuterDiameterMm) > toleranceMm)
+    ) {
+      warnings.push("Lens cup OD does not match shared stack OD.");
+    }
+    if (
+      targetStackOuterDiameterMm > 0 &&
+      spacers.some((spacer) => Math.abs(spacer.outerDiameterMm - targetStackOuterDiameterMm) > toleranceMm)
+    ) {
+      warnings.push("Spacer OD does not match shared stack OD.");
+    }
+    if (cascadeSizing.carrierInnerDiameterMm <= targetStackOuterDiameterMm) {
+      warnings.push("Optical carrier ID is too small for lenscup/spacer stack.");
+    }
+    if (cascadeSizing.fixedBarrelInnerDiameterMm <= cascadeSizing.carrierOuterDiameterMm) {
+      warnings.push("Fixed PL barrel ID is too small for optical carrier.");
+    }
+    if (spacers.some((spacer) => spacer.outerDiameterMm <= spacer.innerDiameterMm)) {
+      warnings.push("Spacer OD must be larger than spacer ID.");
+    }
+    if (
+      targetStackOuterDiameterMm > 0 &&
+      glasses.some((glass) => {
+        const localMaxDiameterMm = getMeasuredGlassMaxDiameterMm(glass);
+        if (localMaxDiameterMm <= 0) return false;
+        const cupWallThicknessMm = (targetStackOuterDiameterMm - localMaxDiameterMm) / 2;
+        return cupWallThicknessMm < 1.5;
+      })
+    ) {
+      warnings.push("Lens cup wall may be too thin.");
+    }
+    if (cascadeSizing.carrierWallThicknessMm < 1.5) {
+      warnings.push("Carrier wall may be too thin.");
+    }
+    return [...new Set(warnings)];
+  })();
   const exportModeWarnings = [
     ...(exportMode === "freecad_macro" && !freecadPayload
       ? [
@@ -1187,7 +1227,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
           "OpenSCAD fixed-PL barrel can include an imported PL STL reference under the barrel.",
           "If the PL shape is missing, verify pl_reference_stl_path points to a valid local STL file.",
           "For exact STEP alignment + full assembly workflow, use FreeCAD Assembly Macro with PL STEP.",
-          "Main barrel length should usually be slot start + slot length + a few mm of end margin. For the default 8mm start and 32mm slot, 48mm is a good prototype length."
+          "Main barrel length follows slot start + slot length + end margin. With 8mm start, 32mm slot, and 6mm margin, length is 46mm."
         ]
       : []),
     ...(fixedPlClearanceValidationWarning ? [fixedPlClearanceValidationWarning] : []),
@@ -1195,11 +1235,27 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     ...(fixedPlConnectorDiscWarning ? [fixedPlConnectorDiscWarning] : []),
     ...(fixedPlConnectorDiscThicknessWarning ? [fixedPlConnectorDiscThicknessWarning] : [])
   ];
-  const partWarnings = [
+  const partWarnings = [...new Set([
     ...(sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : []),
+    ...autoFitSystemWarnings,
     ...elementCupValidationWarnings,
     ...slidingCarrierValidationWarnings
-  ];
+  ])];
+  const autoFitSystemSpecs = useMemo(() => {
+    return {
+      largest_glass_diameter: `${pretty(cascadeSizing.sourceGlassMaxDiameterMm)} mm`,
+      minimum_cup_wall_thickness: `${pretty(cascadeSizing.minimumCupWallThicknessMm)} mm`,
+      target_stack_outer_diameter: `${pretty(cascadeSizing.targetStackOuterDiameterMm)} mm`,
+      optical_stack_length: `${pretty(cascadeSizing.opticalStackLengthMm)} mm`,
+      carrier_inner_diameter: `${pretty(cascadeSizing.carrierInnerDiameterMm)} mm`,
+      carrier_outer_diameter: `${pretty(cascadeSizing.carrierOuterDiameterMm)} mm`,
+      fixed_barrel_inner_diameter: `${pretty(cascadeSizing.fixedBarrelInnerDiameterMm)} mm`,
+      fixed_barrel_outer_diameter: `${pretty(cascadeSizing.fixedBarrelOuterDiameterMm)} mm`,
+      fixed_barrel_length: `${pretty(cascadeSizing.mainBarrelLengthMm)} mm`,
+      lenscup_od: `${pretty(cascadeSizing.targetStackOuterDiameterMm)} mm`,
+      spacer_od: `${pretty(cascadeSizing.targetStackOuterDiameterMm)} mm`
+    };
+  }, [cascadeSizing]);
 
   const specs = useMemo(() => {
     const values: Record<string, string | number | boolean> = {
@@ -1310,11 +1366,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.cup_depth = `${pretty(cascadeSizing.cupDepthMm ?? 0)} mm`;
       values.cup_outer_diameter = `${pretty(cascadeSizing.cupOuterDiameterMm ?? 0)} mm`;
       values.carrier_length_source =
-        cascadeSizing.carrierLengthSource === "cup_depth"
-          ? "cup depth + 3.0mm"
-          : cascadeSizing.carrierLengthSource === "optical_stack_length"
-            ? "optical stack length + 3.0mm"
-            : "manual";
+        cascadeSizing.carrierLengthSource === "optical_stack_length" ? "optical stack length + 3.0mm" : "manual";
       values.carrier_od = `${pretty(cascadeSizing.carrierOuterDiameterMm)} mm`;
       values.fixed_barrel_id = `${pretty(payload.params.mainBarrelInnerDiameterMm)} mm`;
       values.slot_length_source =
@@ -1360,11 +1412,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.cup_depth = `${pretty(cascadeSizing.cupDepthMm ?? 0)} mm`;
       values.cup_outer_diameter = `${pretty(cascadeSizing.cupOuterDiameterMm ?? 0)} mm`;
       values.carrier_length_source =
-        cascadeSizing.carrierLengthSource === "cup_depth"
-          ? "cup depth + 3.0mm"
-          : cascadeSizing.carrierLengthSource === "optical_stack_length"
-            ? "optical stack length + 3.0mm"
-            : "manual";
+        cascadeSizing.carrierLengthSource === "optical_stack_length" ? "optical stack length + 3.0mm" : "manual";
       values.carrier_od = `${pretty(payload.params.outerDiameterMm)} mm`;
       values.fixed_barrel_id = `${pretty(cascadeSizing.fixedBarrelInnerDiameterMm)} mm`;
       values.slot_length_source =
@@ -1507,7 +1555,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
               }
             >
               <option value="manual">manual</option>
-              <option value="lens_cup_or_stack">from selected lens cup / optical stack length</option>
+              <option value="lens_cup_or_stack">from full optical stack length</option>
             </Select>
             <NumberInput
               label="Carrier length manual (mm)"
@@ -1523,12 +1571,12 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
             />
           </div>
           <p className="text-sm text-labMuted">
-            In automatic mode, carrier length defaults to cup depth + 3.0mm when a lens cup source is available,
-            otherwise it falls back to optical stack length + 3.0mm.
+            In automatic mode, carrier length defaults to optical stack length + 3.0mm.
           </p>
         </div>
       )}
 
+      <PartSpecCard title="Auto-fit System" specs={autoFitSystemSpecs} />
       <PartSpecCard title="Part Specs" specs={specs} />
       <WarningBox title="Export Mode Notes" lines={exportModeWarnings} />
       <WarningBox title="Part Warnings" lines={partWarnings} />

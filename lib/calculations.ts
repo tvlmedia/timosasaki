@@ -1,11 +1,20 @@
 import { getItemOpticalTypeLabel } from "@/lib/stackMeta";
 import type { CadDefaults, StackItem } from "@/types";
 
+const DEFAULT_MIN_CUP_WALL_THICKNESS_MM = 2.0;
+const DEFAULT_SHARED_STACK_ROUNDING_INCREMENT_MM = 0.5;
+
 function toPositive(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return 0;
   }
   return value;
+}
+
+function roundUpToIncrement(value: number, increment: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  if (!Number.isFinite(increment) || increment <= 0) return value;
+  return Math.ceil(value / increment) * increment;
 }
 
 function sorted(items: StackItem[]): StackItem[] {
@@ -68,16 +77,10 @@ function getGlassMaxDiameterForCup(item?: StackItem): number {
 function getTargetStackOuterDiameterForWarnings(items: StackItem[], defaults: CadDefaults): number {
   const manualTarget = toPositive(defaults.targetStackOuterDiameterMm);
   if (manualTarget > 0) return manualTarget;
-
-  const cupToCarrierClearance = Math.max(0, toPositive(defaults.cupToCarrierClearanceMm) || 0.6);
-  const fixedBarrelInner = toPositive(defaults.plMainBarrelInnerDiameterMm);
-  if (fixedBarrelInner > 0) {
-    return Math.max(4, fixedBarrelInner - 0.8 - cupToCarrierClearance);
-  }
-
   const largestGlass = getLargestGlassDiameter(items);
   if (largestGlass > 0) {
-    return largestGlass + 6.0;
+    const rawTarget = largestGlass + DEFAULT_MIN_CUP_WALL_THICKNESS_MM * 2;
+    return Math.max(4, roundUpToIncrement(rawTarget, DEFAULT_SHARED_STACK_ROUNDING_INCREMENT_MM));
   }
   return 0;
 }
@@ -141,8 +144,8 @@ export function getTotalStackLength(items: StackItem[]): number {
 export function getLargestGlassDiameter(items: StackItem[]): number {
   const diameters = items
     .filter((item): item is Extract<StackItem, { type: "glass" }> => item.type === "glass")
-    .map((item) => toPositive(item.diameterMm));
-
+    .map((item) => getGlassMaxDiameterForCup(item))
+    .filter((diameter) => diameter > 0);
   return diameters.length ? Math.max(...diameters) : 0;
 }
 
