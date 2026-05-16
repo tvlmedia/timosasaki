@@ -317,13 +317,7 @@ function estimateCupOffsetsForGlass(
 
   const advancedProfile = normalizeAdvancedProfileForCup(glass);
   const insertionSide = resolveCupInsertionSide(glass, advancedProfile);
-  const preferredRetainingSide = resolveCupRetainingSide(glass, insertionSide);
-  const retainingSide: ResolvedCupRetainingSide =
-    preferredRetainingSide === "none"
-      ? "none"
-      : insertionSide === "front"
-        ? "rear"
-        : "front";
+  const retainingSide: ResolvedCupRetainingSide = resolveCupRetainingSide(glass, insertionSide);
   const rearLipMm = getElementCupRearLipDefaultMm(glass, defaults);
   const profileLengthMm =
     getGlassProfileLengthMm(glass) ?? toPositive(glass.thicknessMm);
