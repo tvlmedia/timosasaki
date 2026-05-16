@@ -542,10 +542,11 @@ function createPayload(
         plMainBarrelInnerDefault,
         getRecommendedBarrelInnerDiameter(project.stackItems, defaults)
       );
+      const desiredCarrierClearance = 0.8;
       const carrierOuter = Number(
         Math.max(
           largestGlassDiameter + defaults.radialClearanceMm * 2 + 0.8,
-          fixedInner - (defaults.printToleranceMm + defaults.radialClearanceMm + 0.15) * 2
+          fixedInner - desiredCarrierClearance
         ).toFixed(3)
       );
       const carrierInner = Number(
@@ -557,7 +558,7 @@ function createPayload(
       const focusTravelMm =
         focusDerived.recommendedPrototypeTravelMm ?? plSlotLengthManual;
       const carrierLength = Number(Math.max(18, Math.min(focusTravelMm * 0.72, 52)).toFixed(3));
-      const pinHoleDiameter = Number((Math.max(1.5, plPinDiameter) + 0.1).toFixed(3));
+      const pinHoleDiameter = Number((plPinDiameter + plPinClearance).toFixed(3));
       const pinBossDiameter = Number((pinHoleDiameter + 3).toFixed(3));
       const pinHoleZ = Number((carrierLength * 0.5).toFixed(3));
       return {
@@ -568,11 +569,11 @@ function createPayload(
           outerDiameterMm: Math.max(carrierOuter, carrierInner + 0.8),
           lengthMm: carrierLength,
           startZMm: 0,
-          pinHoleCount: plSlotCount,
+          pinHoleCount: 2,
           pinHoleAngleOffsetDeg: plSlotAngleOffset,
           pinHoleDiameterMm: pinHoleDiameter,
           pinHoleZMm: pinHoleZ,
-          addPinBosses: true,
+          addPinBosses: false,
           pinBossDiameterMm: pinBossDiameter,
           pinBossHeightMm: 2,
           facets: defaults.facets
@@ -745,6 +746,35 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     (project.cadDefaults.plClearanceOuterDiameterMm as number) <= payload.params.mainBarrelInnerDiameterMm
       ? "PL clearance outer diameter must be larger than barrel inner diameter."
       : null;
+  const slidingCarrierValidationWarnings = (() => {
+    if (payload.type !== "sliding_optical_carrier") return [] as string[];
+    const fixedBarrelInnerDiameter = Math.max(
+      project.cadDefaults.plMainBarrelInnerDiameterMm ?? 40.0,
+      getRecommendedBarrelInnerDiameter(project.stackItems, project.cadDefaults)
+    );
+    const warnings: string[] = [];
+    if (payload.params.addPinBosses) {
+      warnings.push("External pin bosses may prevent the carrier from sliding inside the fixed barrel.");
+    }
+    if (payload.params.outerDiameterMm >= fixedBarrelInnerDiameter) {
+      warnings.push(
+        "Carrier outer diameter must be smaller than fixed barrel inner diameter. Recommended clearance: carrier_outer_diameter = fixed_barrel_inner_diameter - 0.6mm to 1.0mm."
+      );
+    }
+    const carrierClearance = fixedBarrelInnerDiameter - payload.params.outerDiameterMm;
+    if (carrierClearance > 0 && (carrierClearance < 0.6 || carrierClearance > 1.0)) {
+      warnings.push(
+        "Recommended carrier-to-barrel clearance is 0.6mm to 1.0mm (carrier_outer_diameter = fixed_barrel_inner_diameter - 0.6mm to 1.0mm)."
+      );
+    }
+    const wallThickness = (payload.params.outerDiameterMm - payload.params.innerDiameterMm) / 2;
+    if (wallThickness < 1.2) {
+      warnings.push(
+        "Carrier wall is very thin for pin holes and may break. Increase barrel ID, reduce carrier ID, or use a larger outer carrier."
+      );
+    }
+    return warnings;
+  })();
   const exportModeWarnings = [
     ...(exportMode === "freecad_macro" && !freecadPayload
       ? [
@@ -760,7 +790,10 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       : []),
     ...(fixedPlClearanceValidationWarning ? [fixedPlClearanceValidationWarning] : [])
   ];
-  const partWarnings = sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : [];
+  const partWarnings = [
+    ...(sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : []),
+    ...slidingCarrierValidationWarnings
+  ];
 
   const specs = useMemo(() => {
     const values: Record<string, string | number | boolean> = {
