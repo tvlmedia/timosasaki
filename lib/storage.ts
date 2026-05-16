@@ -147,6 +147,33 @@ export function normalizeProject(project: LensProject): LensProject {
     stackItems: opticalStackItems
       .map((item, index) => {
         const base = { ...item, positionIndex: index };
+        if (base.type === "spacer") {
+          const mode =
+            base.spacerDiameterMode === "match_lens_cups" ||
+            base.spacerDiameterMode === "match_carrier" ||
+            base.spacerDiameterMode === "manual"
+              ? base.spacerDiameterMode
+              : base.autoFitToBarrel === false
+                ? "manual"
+                : "match_lens_cups";
+          return {
+            ...base,
+            autoFitToBarrel: mode !== "manual",
+            spacerDiameterMode: mode,
+            manualInnerDiameterMm:
+              Number.isFinite(base.manualInnerDiameterMm ?? Number.NaN) && (base.manualInnerDiameterMm as number) > 0
+                ? base.manualInnerDiameterMm
+                : mode === "manual"
+                  ? base.innerDiameterMm
+                  : undefined,
+            manualOuterDiameterMm:
+              Number.isFinite(base.manualOuterDiameterMm ?? Number.NaN) && (base.manualOuterDiameterMm as number) > 0
+                ? base.manualOuterDiameterMm
+                : mode === "manual"
+                  ? base.outerDiameterMm
+                  : undefined
+          };
+        }
         if (base.type === "retaining_ring") {
           return {
             ...base,

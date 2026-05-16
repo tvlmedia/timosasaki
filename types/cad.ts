@@ -53,6 +53,8 @@ export type CadDefaults = {
   connectorDiscOuterDiameterMm?: number;
   connectorDiscInnerDiameterMm?: number;
   connectorDiscThicknessMm?: number;
+  connectorOverlapIntoPlMm?: number;
+  barrelToDiscOverlapMm?: number;
   connectorDiscOverlapWithBarrelMm?: number;
 };
 
@@ -228,6 +230,8 @@ export type FixedPLBarrelWithSlotsParams = {
   connectorDiscOuterDiameterMm?: number;
   connectorDiscInnerDiameterMm?: number;
   connectorDiscThicknessMm?: number;
+  connectorOverlapIntoPlMm?: number;
+  barrelToDiscOverlapMm?: number;
   connectorDiscOverlapWithBarrelMm?: number;
   fuseBarrelToPlReference?: boolean;
   facets: number;

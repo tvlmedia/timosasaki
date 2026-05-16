@@ -45,6 +45,49 @@ function getNearbyAperture(items: StackItem[], index: number): number {
   return Math.max(left, right);
 }
 
+function getGlassMaxDiameterForCup(item?: StackItem): number {
+  if (!item || item.type !== "glass") return 0;
+  const candidates: number[] = [toPositive(item.diameterMm)];
+  if (item.hasSteppedProfile) {
+    candidates.push(toPositive(item.largeDiameterMm), toPositive(item.smallDiameterMm));
+  }
+  if (item.advancedProfile?.enabled) {
+    candidates.push(toPositive(item.advancedProfile.maxDiameterMm));
+    (item.advancedProfile.sections ?? []).forEach((section) => {
+      candidates.push(toPositive(section.diameterMm));
+    });
+  }
+  if (item.advancedProfileEnabled) {
+    (item.profileSegments ?? []).forEach((segment) => {
+      candidates.push(toPositive(segment.diameterMm));
+    });
+  }
+  return Math.max(0, ...candidates);
+}
+
+function getNearestLensCupOuterDiameterOnSide(
+  items: StackItem[],
+  fromIndex: number,
+  direction: -1 | 1,
+  defaults: CadDefaults
+): number {
+  let index = fromIndex + direction;
+  while (index >= 0 && index < items.length) {
+    const cupSourceDiameter = getGlassMaxDiameterForCup(items[index]);
+    if (cupSourceDiameter > 0) {
+      return cupSourceDiameter + defaults.wallThicknessMm * 2;
+    }
+    index += direction;
+  }
+  return 0;
+}
+
+function getAdjacentLensCupOuterDiameter(items: StackItem[], index: number, defaults: CadDefaults): number {
+  const left = getNearestLensCupOuterDiameterOnSide(items, index, -1, defaults);
+  const right = getNearestLensCupOuterDiameterOnSide(items, index, 1, defaults);
+  return Math.max(left, right);
+}
+
 function getSpacerWallWidth(item: Extract<StackItem, { type: "spacer" }>): number {
   return (toPositive(item.outerDiameterMm) - toPositive(item.innerDiameterMm)) / 2;
 }
@@ -139,17 +182,18 @@ export function getStackWarnings(items: StackItem[], defaults: CadDefaults): str
       if (toPositive(item.thicknessMm) === 0) {
         warnings.push(`${item.name || "Spacer / Air Gap Ring"} thickness must be positive.`);
       }
-      if (item.innerDiameterMm >= item.outerDiameterMm) {
-        warnings.push(
-          `${item.name || "Spacer / Air Gap Ring"} inner diameter must be smaller than outer diameter.`
-        );
+      if (item.outerDiameterMm <= item.innerDiameterMm) {
+        warnings.push("Spacer OD must be larger than spacer ID.");
       }
 
       const nearbyAperture = getNearbyAperture(orderedItems, i);
       if (nearbyAperture > 0 && item.innerDiameterMm < nearbyAperture) {
-        warnings.push(
-          `${item.name || "Spacer / Air Gap Ring"} inner diameter may vignette nearby clear aperture or iris aperture.`
-        );
+        warnings.push("Spacer ID may vignette.");
+      }
+
+      const adjacentCupOuterDiameter = getAdjacentLensCupOuterDiameter(orderedItems, i, defaults);
+      if (adjacentCupOuterDiameter > 0 && Math.abs(item.outerDiameterMm - adjacentCupOuterDiameter) > 0.5) {
+        warnings.push("Spacer OD does not match adjacent lens cup OD; stack may not align.");
       }
 
       if (getSpacerWallWidth(item) < 1.2) {
@@ -226,16 +270,16 @@ export function getPartWarnings(item: StackItem, defaults: CadDefaults): string[
   if (item.type === "spacer" && getSpacerWallWidth(item) < 1.2) {
     warnings.push("Spacer wall may be fragile for FDM printing.");
   }
+  if (item.type === "spacer" && item.outerDiameterMm <= item.innerDiameterMm) {
+    warnings.push("Spacer OD must be larger than spacer ID.");
+  }
   if (item.type === "iris" && item.apertureDiameterMm > item.diskDiameterMm) {
     warnings.push("Iris aperture cannot be larger than disk diameter.");
   }
   if (item.type === "diffusion" && item.clearCenterDiameterMm > item.diffusionOuterDiameterMm) {
     warnings.push("Diffusion clear center cannot be larger than diffusion outer diameter.");
   }
-  if (
-    (item.type === "spacer" || item.type === "barrel" || item.type === "retaining_ring") &&
-    item.innerDiameterMm >= item.outerDiameterMm
-  ) {
+  if ((item.type === "barrel" || item.type === "retaining_ring") && item.innerDiameterMm >= item.outerDiameterMm) {
     warnings.push("Inner diameter must be smaller than outer diameter.");
   }
   if (item.type === "mount" && item.mountType === "PL") {

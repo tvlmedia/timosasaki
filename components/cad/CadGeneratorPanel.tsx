@@ -691,10 +691,21 @@ function createPayload(
         plStepUpStart
       );
       const plInterfaceOuterDiameter = Math.max(1, defaults.plInterfaceOuterDiameterMm ?? 54.9);
-      const connectorDiscEnabled = defaults.connectorDiscEnabled ?? true;
-      const connectorDiscThickness = Math.max(0, defaults.connectorDiscThicknessMm ?? 2.0);
-      const connectorDiscOverlapWithBarrel = Math.max(0, defaults.connectorDiscOverlapWithBarrelMm ?? 1.0);
-      const connectorDiscOuterDiameter = Math.max(plInterfaceOuterDiameter, mainBarrelOuter);
+      const connectorDiscEnabledByFit = mainBarrelOuter < plInterfaceOuterDiameter;
+      const connectorDiscEnabled = defaults.connectorDiscEnabled ?? connectorDiscEnabledByFit;
+      const connectorDiscThickness = Math.max(0, defaults.connectorDiscThicknessMm ?? 0.8);
+      const connectorOverlapIntoPl = Math.max(0, defaults.connectorOverlapIntoPlMm ?? 0.8);
+      const barrelToDiscOverlap = Math.max(
+        0,
+        defaults.barrelToDiscOverlapMm ?? defaults.connectorDiscOverlapWithBarrelMm ?? 0.4
+      );
+      const connectorDiscOuterDiameterDefault = Math.max(plInterfaceOuterDiameter, mainBarrelOuter);
+      const connectorDiscOuterDiameter = Math.max(
+        mainBarrelOuter,
+        Number.isFinite(defaults.connectorDiscOuterDiameterMm ?? Number.NaN)
+          ? (defaults.connectorDiscOuterDiameterMm as number)
+          : connectorDiscOuterDiameterDefault
+      );
       const connectorDiscInnerDiameter = mainBarrelInner;
       const connectorDiscThicknessEffective = connectorDiscEnabled ? connectorDiscThickness : 0;
       const mainBarrelLength = Math.max(0.1, cascade.mainBarrelLengthMm);
@@ -749,7 +760,9 @@ function createPayload(
           connectorDiscOuterDiameterMm: connectorDiscOuterDiameter,
           connectorDiscInnerDiameterMm: connectorDiscInnerDiameter,
           connectorDiscThicknessMm: connectorDiscThickness,
-          connectorDiscOverlapWithBarrelMm: connectorDiscOverlapWithBarrel,
+          connectorOverlapIntoPlMm: connectorOverlapIntoPl,
+          barrelToDiscOverlapMm: barrelToDiscOverlap,
+          connectorDiscOverlapWithBarrelMm: barrelToDiscOverlap,
           includePlReferenceMount: true,
           useImportedPlReferenceStl: true,
           plReferenceStlPath,
@@ -1021,6 +1034,18 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       ? "Main barrel OD is smaller than PL interface OD and may not connect to the PL mount. Enable connector disc."
       : null;
   })();
+  const fixedPlConnectorDiscThicknessWarning = (() => {
+    if (payload.type !== "fixed_pl_barrel_with_slots") return null;
+    if (!(payload.params.connectorDiscEnabled ?? true)) return null;
+    const thickness = payload.params.connectorDiscThicknessMm ?? 0.8;
+    if (thickness > 1.5) {
+      return "Connector disc is quite thick and may look like a raised flange. For a thin adapter plate use 0.8-1.2mm.";
+    }
+    if (thickness < 0.6) {
+      return "Connector disc may be too thin for FDM printing.";
+    }
+    return null;
+  })();
   const slidingCarrierValidationWarnings = (() => {
     if (payload.type !== "sliding_optical_carrier") return [] as string[];
     const fixedBarrelInnerDiameter = Math.max(
@@ -1111,7 +1136,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       : []),
     ...(fixedPlClearanceValidationWarning ? [fixedPlClearanceValidationWarning] : []),
     ...(fixedPlMainBarrelLengthWarning ? [fixedPlMainBarrelLengthWarning] : []),
-    ...(fixedPlConnectorDiscWarning ? [fixedPlConnectorDiscWarning] : [])
+    ...(fixedPlConnectorDiscWarning ? [fixedPlConnectorDiscWarning] : []),
+    ...(fixedPlConnectorDiscThicknessWarning ? [fixedPlConnectorDiscThicknessWarning] : [])
   ];
   const partWarnings = [
     ...(sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : []),
@@ -1233,13 +1259,21 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       values.rear_neck_length = `${pretty(payload.params.rearNeckLengthMm)} mm`;
       values.main_barrel_od = `${pretty(payload.params.mainBarrelOuterDiameterMm)} mm`;
       values.main_barrel_id = `${pretty(payload.params.mainBarrelInnerDiameterMm)} mm`;
+      values.main_barrel_outer_diameter = `${pretty(payload.params.mainBarrelOuterDiameterMm)} mm`;
+      values.barrel_inner_diameter = `${pretty(payload.params.mainBarrelInnerDiameterMm)} mm`;
       values.main_barrel_length = `${pretty(payload.params.mainBarrelLengthMm)} mm`;
       values.pl_interface_outer_diameter = `${pretty(payload.params.plInterfaceOuterDiameterMm ?? 54.9)} mm`;
       values.connector_disc_enabled = payload.params.connectorDiscEnabled ?? true;
       values.connector_disc_outer_diameter = `${pretty(payload.params.connectorDiscOuterDiameterMm ?? 0)} mm`;
       values.connector_disc_inner_diameter = `${pretty(payload.params.connectorDiscInnerDiameterMm ?? payload.params.mainBarrelInnerDiameterMm)} mm`;
-      values.connector_disc_thickness = `${pretty(payload.params.connectorDiscThicknessMm ?? 2.0)} mm`;
-      values.connector_disc_overlap_with_barrel = `${pretty(payload.params.connectorDiscOverlapWithBarrelMm ?? 1.0)} mm`;
+      values.connector_disc_thickness = `${pretty(payload.params.connectorDiscThicknessMm ?? 0.8)} mm`;
+      values.connector_overlap_into_pl = `${pretty(payload.params.connectorOverlapIntoPlMm ?? 0.8)} mm`;
+      values.barrel_to_disc_overlap = `${pretty(
+        payload.params.barrelToDiscOverlapMm ?? payload.params.connectorDiscOverlapWithBarrelMm ?? 0.4
+      )} mm`;
+      values.connector_disc_overlap_with_barrel = `${pretty(
+        payload.params.connectorDiscOverlapWithBarrelMm ?? payload.params.barrelToDiscOverlapMm ?? 0.4
+      )} mm`;
       values.slot_count = payload.params.slotCount;
       values.slot_width = `${pretty(payload.params.slotWidthMm)} mm`;
       values.slot_length = `${pretty(payload.params.slotLengthMm)} mm`;

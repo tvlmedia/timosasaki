@@ -32,6 +32,14 @@ const stepDirectionOptions: Array<{ value: StepDirection; label: string }> = [
   { value: "unknown", label: "Unknown" }
 ];
 
+type SpacerDiameterMode = "match_lens_cups" | "match_carrier" | "manual";
+
+const spacerDiameterModeOptions: Array<{ value: SpacerDiameterMode; label: string }> = [
+  { value: "match_lens_cups", label: "Match lens cups" },
+  { value: "match_carrier", label: "Match carrier" },
+  { value: "manual", label: "Manual" }
+];
+
 function normalizePositions(items: StackItem[]): StackItem[] {
   return items.map((item, index) => ({ ...item, positionIndex: index }));
 }
@@ -81,6 +89,7 @@ function createStackItem(type: StackItemType, index: number): StackItem {
         outerDiameterMm: 38,
         thicknessMm: 1,
         autoFitToBarrel: true,
+        spacerDiameterMode: "match_lens_cups",
         hasAntiReflectionGrooves: false,
         chamferEnabled: false,
         chamferMm: 0.2
@@ -424,32 +433,109 @@ function getReferenceBarrelInnerDiameter(
   return getRecommendedBarrelInnerDiameter(items, defaults);
 }
 
+function getSpacerDiameterMode(item: Extract<StackItem, { type: "spacer" }>): SpacerDiameterMode {
+  if (
+    item.spacerDiameterMode === "match_lens_cups" ||
+    item.spacerDiameterMode === "match_carrier" ||
+    item.spacerDiameterMode === "manual"
+  ) {
+    return item.spacerDiameterMode;
+  }
+  return item.autoFitToBarrel === false ? "manual" : "match_lens_cups";
+}
+
+function getGlassMaxDiameterForCup(item?: StackItem): number {
+  if (!item || item.type !== "glass") return 0;
+
+  const candidates: number[] = [toPositive(item.diameterMm)];
+  if (item.hasSteppedProfile) {
+    candidates.push(toPositive(item.largeDiameterMm), toPositive(item.smallDiameterMm));
+  }
+  if (item.advancedProfile?.enabled) {
+    candidates.push(toPositive(item.advancedProfile.maxDiameterMm));
+    (item.advancedProfile.sections ?? []).forEach((section) => {
+      candidates.push(toPositive(section.diameterMm));
+    });
+  }
+  if (item.advancedProfileEnabled) {
+    (item.profileSegments ?? []).forEach((segment) => {
+      candidates.push(toPositive(segment.diameterMm));
+    });
+  }
+
+  return Math.max(0, ...candidates);
+}
+
+function getNearestLensCupOuterDiameterOnSide(
+  items: StackItem[],
+  fromIndex: number,
+  direction: -1 | 1,
+  defaults: CadDefaults
+): number {
+  let index = fromIndex + direction;
+  while (index >= 0 && index < items.length) {
+    const candidate = getGlassMaxDiameterForCup(items[index]);
+    if (candidate > 0) {
+      return Number((candidate + defaults.wallThicknessMm * 2).toFixed(2));
+    }
+    index += direction;
+  }
+  return 0;
+}
+
+function getAdjacentLensCupOuterDiameter(items: StackItem[], index: number, defaults: CadDefaults): number {
+  const left = getNearestLensCupOuterDiameterOnSide(items, index, -1, defaults);
+  const right = getNearestLensCupOuterDiameterOnSide(items, index, 1, defaults);
+  return Math.max(left, right);
+}
+
+function getSpacerCarrierOuterDiameterTarget(
+  items: StackItem[],
+  mechanicalParts: MechanicalPart[],
+  defaults: CadDefaults
+): number {
+  const fitClearancePerSide = Math.max(defaults.radialClearanceMm + defaults.printToleranceMm, 0.25);
+  const referenceCarrierInner = getReferenceBarrelInnerDiameter(items, mechanicalParts, defaults);
+  const fallbackCarrierInner = getRecommendedBarrelInnerDiameter(items, defaults);
+  const carrierInnerDiameter = Math.max(referenceCarrierInner, fallbackCarrierInner);
+  return Math.max(12, carrierInnerDiameter - fitClearancePerSide * 2);
+}
+
 function deriveSpacerRingDimensions(
   items: StackItem[],
   mechanicalParts: MechanicalPart[],
   defaults: CadDefaults,
-  index: number
+  index: number,
+  spacer: Extract<StackItem, { type: "spacer" }>
 ): {
   innerDiameterMm: number;
   outerDiameterMm: number;
 } {
-  const barrelInner = getReferenceBarrelInnerDiameter(items, mechanicalParts, defaults);
-  const fitClearancePerSide = Math.max(defaults.radialClearanceMm + defaults.printToleranceMm, 0.25);
-  const outerDiameterMm = Math.max(12, barrelInner - fitClearancePerSide * 2);
-
+  const mode = getSpacerDiameterMode(spacer);
+  const adjacentCupOuterDiameter = getAdjacentLensCupOuterDiameter(items, index, defaults);
+  const carrierBasedOuterDiameter = getSpacerCarrierOuterDiameterTarget(items, mechanicalParts, defaults);
   const nearbyAperture = getNearbyAperture(items, index);
-  const preferredWallWidth = 1.2;
+  const defaultInnerFromAperture = nearbyAperture > 0 ? nearbyAperture + 2.0 : 30.0;
   const minimumWallWidth = 0.8;
-  const preferredInner = outerDiameterMm - preferredWallWidth * 2;
-  const minimumUsefulInner = nearbyAperture > 0 ? nearbyAperture + 0.4 : 0;
+  const manualOuter = toPositive(spacer.manualOuterDiameterMm) || toPositive(spacer.outerDiameterMm);
+  const manualInner = toPositive(spacer.manualInnerDiameterMm) || toPositive(spacer.innerDiameterMm);
+
+  const outerCandidate =
+    mode === "manual"
+      ? manualOuter
+      : mode === "match_carrier"
+        ? carrierBasedOuterDiameter
+        : adjacentCupOuterDiameter > 0
+          ? adjacentCupOuterDiameter
+          : carrierBasedOuterDiameter;
+  const outerDiameterMm = Math.max(10, outerCandidate > 0 ? outerCandidate : carrierBasedOuterDiameter);
+
+  const innerCandidate = mode === "manual" ? manualInner : defaultInnerFromAperture;
   const hardMaximumInner = outerDiameterMm - minimumWallWidth * 2;
 
   const innerDiameterMm = Math.max(
     4,
-    Math.min(
-      hardMaximumInner,
-      Math.max(minimumUsefulInner, preferredInner > 0 ? preferredInner : outerDiameterMm - minimumWallWidth * 2)
-    )
+    Math.min(hardMaximumInner, innerCandidate > 0 ? innerCandidate : defaultInnerFromAperture)
   );
 
   return {
@@ -483,7 +569,7 @@ function applyAutoFitBarrelDimensions(items: StackItem[], defaults: CadDefaults)
 }
 
 function isAutoFitSpacer(item: Extract<StackItem, { type: "spacer" }>): boolean {
-  return item.autoFitToBarrel !== false;
+  return getSpacerDiameterMode(item) !== "manual";
 }
 
 function deriveRetainingRingDimensions(
@@ -528,7 +614,7 @@ function applyAutoFitSpacerDimensions(
 ): StackItem[] {
   return items.map((item, index) => {
     if (item.type !== "spacer" || !isAutoFitSpacer(item)) return item;
-    const auto = deriveSpacerRingDimensions(items, mechanicalParts, defaults, index);
+    const auto = deriveSpacerRingDimensions(items, mechanicalParts, defaults, index, item);
     return { ...item, ...auto };
   });
 }
@@ -858,7 +944,7 @@ export function StackBuilder({
     if (index < 0) return;
     const target = withBarrelAutoFit[index];
     if (target.type !== "spacer") return;
-    const auto = deriveSpacerRingDimensions(withBarrelAutoFit, mechanicalParts, project.cadDefaults, index);
+    const auto = deriveSpacerRingDimensions(withBarrelAutoFit, mechanicalParts, project.cadDefaults, index, target);
     updateTypedItem(id, "spacer", (entry) => ({ ...entry, ...auto }));
   };
 
@@ -892,11 +978,7 @@ export function StackBuilder({
       mechanicalParts,
       project.cadDefaults
     );
-    const adjusted = withRetainingAutoFit.map((item, index) => {
-      if (item.type !== "spacer") return item;
-      const auto = deriveSpacerRingDimensions(withRetainingAutoFit, mechanicalParts, project.cadDefaults, index);
-      return { ...item, ...auto };
-    });
+    const adjusted = applyAutoFitSpacerDimensions(withRetainingAutoFit, mechanicalParts, project.cadDefaults);
     commitItems(adjusted);
   };
 
@@ -1306,37 +1388,55 @@ export function StackBuilder({
                     A physical ring/shim that sets the optical air gap between parts. The inner hole stays open for
                     the light path.
                   </p>
-                  <label className="flex items-center gap-2 text-sm text-labMuted">
-                    <input
-                      type="checkbox"
-                      checked={selectedItem.autoFitToBarrel !== false}
-                      onChange={(event) =>
-                        updateTypedItem(selectedItem.id, "spacer", (entry) => ({
-                          ...entry,
-                          autoFitToBarrel: event.target.checked
-                        }))
-                      }
-                    />
-                    Auto-fit diameters to barrel (recommended)
-                  </label>
-                  {selectedItem.autoFitToBarrel !== false && (
+                  <Select
+                    label="Spacer diameter mode"
+                    value={getSpacerDiameterMode(selectedItem)}
+                    onChange={(event) => {
+                      const nextMode = event.target.value as SpacerDiameterMode;
+                      updateTypedItem(selectedItem.id, "spacer", (entry) => ({
+                        ...entry,
+                        spacerDiameterMode: nextMode,
+                        autoFitToBarrel: nextMode !== "manual",
+                        manualInnerDiameterMm:
+                          nextMode === "manual"
+                            ? toPositive(entry.manualInnerDiameterMm) > 0
+                              ? entry.manualInnerDiameterMm
+                              : entry.innerDiameterMm
+                            : entry.manualInnerDiameterMm,
+                        manualOuterDiameterMm:
+                          nextMode === "manual"
+                            ? toPositive(entry.manualOuterDiameterMm) > 0
+                              ? entry.manualOuterDiameterMm
+                              : entry.outerDiameterMm
+                            : entry.manualOuterDiameterMm
+                      }));
+                    }}
+                  >
+                    {spacerDiameterModeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                  {getSpacerDiameterMode(selectedItem) !== "manual" && (
                     <Button
                       variant="ghost"
                       className="w-full text-xs"
                       onClick={() => autoFitSpacer(selectedItem.id)}
                     >
-                      Recalculate auto-fit now
+                      Recalculate spacer sizing now
                     </Button>
                   )}
                   <NumberInput
                     label="Inner diameter (mm)"
                     value={selectedItem.innerDiameterMm}
                     min={0}
-                    disabled={selectedItem.autoFitToBarrel !== false}
+                    disabled={getSpacerDiameterMode(selectedItem) !== "manual"}
                     onChange={(event) =>
                       updateTypedItem(selectedItem.id, "spacer", (entry) => ({
                         ...entry,
-                        innerDiameterMm: Number(event.target.value)
+                        innerDiameterMm: Number(event.target.value),
+                        manualInnerDiameterMm: Number(event.target.value)
                       }))
                     }
                   />
@@ -1344,11 +1444,12 @@ export function StackBuilder({
                     label="Outer diameter (mm)"
                     value={selectedItem.outerDiameterMm}
                     min={0}
-                    disabled={selectedItem.autoFitToBarrel !== false}
+                    disabled={getSpacerDiameterMode(selectedItem) !== "manual"}
                     onChange={(event) =>
                       updateTypedItem(selectedItem.id, "spacer", (entry) => ({
                         ...entry,
-                        outerDiameterMm: Number(event.target.value)
+                        outerDiameterMm: Number(event.target.value),
+                        manualOuterDiameterMm: Number(event.target.value)
                       }))
                     }
                   />

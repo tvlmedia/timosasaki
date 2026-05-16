@@ -112,6 +112,9 @@ export type SpacerItem = BaseStackItem & {
   outerDiameterMm: number;
   thicknessMm: number;
   autoFitToBarrel?: boolean;
+  spacerDiameterMode?: "match_lens_cups" | "match_carrier" | "manual";
+  manualInnerDiameterMm?: number;
+  manualOuterDiameterMm?: number;
   hasAntiReflectionGrooves?: boolean;
   chamferEnabled?: boolean;
   chamferMm?: number;

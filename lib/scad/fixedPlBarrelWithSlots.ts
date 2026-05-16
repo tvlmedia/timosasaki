@@ -12,27 +12,33 @@ export function generateFixedPlBarrelWithSlotsPushPullV4Scad(params: FixedPLBarr
   const plOverlap = Math.max(0, params.plReferenceOverlapMm ?? 2.0);
 
   const barrelInnerDiameter = Math.max(1, params.mainBarrelInnerDiameterMm || params.innerDiameterMm);
-  const plClearanceOuterDiameter = Math.max(
-    1,
-    params.plClearanceOuterDiameterMm ??
-      ((params.plLockingClearanceDiameterMm && params.plLockingClearanceDiameterMm > 0
-        ? params.plLockingClearanceDiameterMm
-        : params.rearNeckOuterDiameterMm) || params.outerDiameterMm)
-  );
-  const plClearanceLength = Math.max(
-    0.1,
-    params.plClearanceLengthMm ?? params.plLockingClearanceLengthMm ?? params.rearNeckLengthMm ?? 4.0
-  );
-  const mainBarrelOuterDiameter = Math.max(
-    plClearanceOuterDiameter,
-    params.mainBarrelOuterDiameterMm || params.outerDiameterMm
-  );
+  const requestedMainBarrelOuterDiameter = params.mainBarrelOuterDiameterMm || params.outerDiameterMm;
+  const mainBarrelOuterDiameter = Math.max(barrelInnerDiameter + 0.1, requestedMainBarrelOuterDiameter);
   const mainBarrelLength = Math.max(0.1, params.mainBarrelLengthMm || params.lengthMm);
+  const plInterfaceOuterDiameter = Math.max(
+    1,
+    params.plInterfaceOuterDiameterMm ?? params.plReferenceMountOuterDiameterMm ?? 54.9
+  );
+  const connectorDiscEnabledByFit = mainBarrelOuterDiameter < plInterfaceOuterDiameter;
+  const connectorDiscEnabled = params.connectorDiscEnabled ?? connectorDiscEnabledByFit;
+  const connectorDiscOuterDiameter = Math.max(
+    mainBarrelOuterDiameter,
+    params.connectorDiscOuterDiameterMm ?? Math.max(plInterfaceOuterDiameter, mainBarrelOuterDiameter)
+  );
+  const connectorDiscInnerDiameter = Math.max(
+    0.1,
+    Math.min(barrelInnerDiameter, params.connectorDiscInnerDiameterMm ?? barrelInnerDiameter)
+  );
+  const connectorDiscThickness = Math.max(0, params.connectorDiscThicknessMm ?? 0.8);
+  const connectorOverlapIntoPl = Math.max(0, params.connectorOverlapIntoPlMm ?? 0.8);
+  const barrelToDiscOverlap = Math.max(
+    0,
+    params.barrelToDiscOverlapMm ?? params.connectorDiscOverlapWithBarrelMm ?? 0.4
+  );
 
-  const reliefToMainOverlap = 1.2;
   const slotStartFromMainBarrel = Math.max(
     0,
-    params.slotStartFromMainBarrelMm ?? ((params.slotStartZMm ?? 0) - plClearanceLength)
+    params.slotStartFromMainBarrelMm ?? (params.slotStartZMm ?? 0)
   );
   const wallThickness = Math.max(0.1, (mainBarrelOuterDiameter - barrelInnerDiameter) / 2);
   const slotCutDepth = Math.max(0.1, params.slotCutDepthMm ?? Math.max(9.0, wallThickness * 3));
@@ -46,7 +52,7 @@ export function generateFixedPlBarrelWithSlotsPushPullV4Scad(params: FixedPLBarr
 // Doel:
 // - PL mount + fixed barrel als één preview/printable assembly
 // - Binnenboring blijft constant, zodat glas/carrier erdoor kan
-// - Alleen buitenkant krijgt kort PL-lock clearance relief
+// - Dunne connector disc koppelt PL interface aan de main barrel
 // - Daarna main barrel met axiale slots
 // - Geen losse inner ring / geen lange neck / geen extra flange
 
@@ -74,14 +80,16 @@ barrel_attach_z = ${n(barrelAttachZ)};
 pl_overlap = ${n(plOverlap)};
 
 barrel_inner_diameter = ${n(barrelInnerDiameter)};
-
-pl_clearance_outer_diameter = ${n(plClearanceOuterDiameter)};
-pl_clearance_length = ${n(plClearanceLength)};
-
 main_barrel_outer_diameter = ${n(mainBarrelOuterDiameter)};
 main_barrel_length = ${n(mainBarrelLength)};
+pl_interface_outer_diameter = ${n(plInterfaceOuterDiameter)};
 
-relief_to_main_overlap = ${n(reliefToMainOverlap)};
+connector_disc_enabled = ${connectorDiscEnabled ? "true" : "false"};
+connector_disc_outer_diameter = ${n(connectorDiscOuterDiameter)};
+connector_disc_inner_diameter = ${n(connectorDiscInnerDiameter)};
+connector_disc_thickness = ${n(connectorDiscThickness)};
+connector_overlap_into_pl = ${n(connectorOverlapIntoPl)};
+barrel_to_disc_overlap = ${n(barrelToDiscOverlap)};
 
 slot_count = ${slotCount};
 slot_angle_offset_deg = ${n(params.slotAngleOffsetDeg)};
@@ -94,6 +102,7 @@ pin_clearance = ${n(pinClearance)};
 
 guide_pin_diameter = pin_diameter;
 guide_pin_length = main_barrel_outer_diameter + 10;
+slot_barrel_base_z = connector_disc_enabled ? connector_disc_thickness : 0;
 
 module tube_at(z, od, id, h) {
   translate([0, 0, z])
@@ -115,38 +124,52 @@ module pl_mount_import() {
         import(pl_reference_stl_path);
 }
 
+module connector_disc_local() {
+  if (connector_disc_enabled) {
+    tube_at(
+      -connector_overlap_into_pl,
+      connector_disc_outer_diameter,
+      connector_disc_inner_diameter,
+      connector_disc_thickness + connector_overlap_into_pl
+    );
+  }
+}
+
+module main_barrel_local() {
+  local_main_barrel_start_z = connector_disc_enabled ? connector_disc_thickness - barrel_to_disc_overlap : 0;
+  local_main_barrel_length = connector_disc_enabled ? main_barrel_length + barrel_to_disc_overlap : main_barrel_length;
+  tube_at(
+    local_main_barrel_start_z,
+    main_barrel_outer_diameter,
+    barrel_inner_diameter,
+    local_main_barrel_length
+  );
+}
+
+module axial_slot_local(angle_deg) {
+  rotate([0, 0, angle_deg])
+    translate([
+      main_barrel_outer_diameter / 2 - slot_cut_depth / 2,
+      -slot_width / 2,
+      slot_barrel_base_z + slot_start_from_main_barrel
+    ])
+      cube([
+        slot_cut_depth,
+        slot_width,
+        slot_length
+      ]);
+}
+
 module generated_barrel_local_positive_z() {
   difference() {
     union() {
-      tube_at(
-        -pl_overlap,
-        pl_clearance_outer_diameter,
-        barrel_inner_diameter,
-        pl_clearance_length + pl_overlap
-      );
-
-      tube_at(
-        pl_clearance_length - relief_to_main_overlap,
-        main_barrel_outer_diameter,
-        barrel_inner_diameter,
-        main_barrel_length + relief_to_main_overlap
-      );
+      connector_disc_local();
+      main_barrel_local();
     }
 
     for (i = [0:slot_count - 1]) {
       angle = slot_angle_offset_deg + i * 360 / slot_count;
-
-      rotate([0, 0, angle])
-        translate([
-          main_barrel_outer_diameter / 2 - slot_cut_depth / 2,
-          -slot_width / 2,
-          pl_clearance_length + slot_start_from_main_barrel
-        ])
-          cube([
-            slot_cut_depth,
-            slot_width,
-            slot_length
-          ]);
+      axial_slot_local(angle);
     }
   }
 }
@@ -167,7 +190,7 @@ module guide_pin_local(angle_deg) {
     translate([
       0,
       0,
-      pl_clearance_length + slot_start_from_main_barrel + slot_length / 2
+      slot_barrel_base_z + slot_start_from_main_barrel + slot_length / 2
     ])
       rotate([0, 90, 0])
         cylinder(
@@ -214,10 +237,15 @@ guide_pins_visual();
 echo("barrel_direction = ", barrel_direction);
 echo("barrel_attach_z = ", barrel_attach_z);
 echo("barrel_inner_diameter constant = ", barrel_inner_diameter);
-echo("pl_clearance_outer_diameter = ", pl_clearance_outer_diameter);
-echo("pl_clearance_length = ", pl_clearance_length);
 echo("main_barrel_outer_diameter = ", main_barrel_outer_diameter);
 echo("main_barrel_length = ", main_barrel_length);
+echo("pl_interface_outer_diameter = ", pl_interface_outer_diameter);
+echo("connector_disc_enabled = ", connector_disc_enabled);
+echo("connector_disc_outer_diameter = ", connector_disc_outer_diameter);
+echo("connector_disc_inner_diameter = ", connector_disc_inner_diameter);
+echo("connector_disc_thickness = ", connector_disc_thickness);
+echo("connector_overlap_into_pl = ", connector_overlap_into_pl);
+echo("barrel_to_disc_overlap = ", barrel_to_disc_overlap);
 echo("slot_length = ", slot_length);
 echo("slot_width = ", slot_width);
 echo("slot clearance = ", slot_width - pin_diameter);
