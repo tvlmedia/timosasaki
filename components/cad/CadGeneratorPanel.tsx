@@ -73,6 +73,37 @@ type SlidingCarrierOverrides = {
   manualLengthMm: number;
 };
 
+type CarrierLengthDerivedSource = "manual" | "cup_depth" | "optical_stack_length";
+type CarrierInnerBaseSource = "cup_outer_diameter" | "largest_glass_diameter";
+type SlotLengthSource = "focus_travel" | "manual_default";
+
+type CascadeSizing = {
+  sourceGlass?: Extract<StackItem, { type: "glass" }>;
+  sourceGlassMaxDiameterMm: number;
+  cupDepthMm?: number;
+  cupOuterDiameterMm?: number;
+  carrierLengthMm: number;
+  carrierLengthSource: CarrierLengthDerivedSource;
+  carrierInnerDiameterMm: number;
+  carrierInnerBaseSource: CarrierInnerBaseSource;
+  carrierOuterDiameterMm: number;
+  carrierFitClearanceMm: number;
+  fixedBarrelInnerDiameterMm: number;
+  slidingClearanceMm: number;
+  slotLengthMm: number;
+  slotLengthSource: SlotLengthSource;
+  slotStartFromMainBarrelMm: number;
+  barrelEndMarginMm: number;
+  mainBarrelLengthMm: number;
+};
+
+const CARRIER_LENGTH_MARGIN_MM = 3.0;
+const MIN_CARRIER_LENGTH_MM = 18.0;
+const MAX_CARRIER_LENGTH_MM = 120.0;
+const MIN_CARRIER_FIT_CLEARANCE_DIAMETER_MM = 0.6;
+const DEFAULT_SLIDING_CLEARANCE_DIAMETER_MM = 0.8;
+const DEFAULT_BARREL_END_MARGIN_MM = 8.0;
+
 function toFiniteOrUndefined(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -127,23 +158,6 @@ function getFocusTravelDerived(project: LensProject): {
     prototypeStartMm: prototypeStart,
     targetMountThroatDiameterMm: toFiniteOrUndefined(focus.targetMountThroatDiameterMm)
   };
-}
-
-function getNearestBarrelInnerDiameter(items: StackItem[], source?: StackItem): number | undefined {
-  const barrels = items.filter(
-    (item): item is Extract<StackItem, { type: "barrel" }> =>
-      item.type === "barrel" && toPositive(item.innerDiameterMm) > 0
-  );
-  if (!barrels.length) return undefined;
-  if (!source) return barrels[0].innerDiameterMm;
-
-  const sourceIndex = source.positionIndex;
-  const nearest = barrels.reduce((best, current) => {
-    const bestDistance = Math.abs(best.positionIndex - sourceIndex);
-    const currentDistance = Math.abs(current.positionIndex - sourceIndex);
-    return currentDistance < bestDistance ? current : best;
-  });
-  return nearest.innerDiameterMm;
 }
 
 function resolvePlStepPath(raw?: string): string {
@@ -202,6 +216,44 @@ function normalizeAdvancedProfileForCup(
   };
 }
 
+function getMeasuredGlassMaxDiameterMm(glass?: Extract<StackItem, { type: "glass" }>): number {
+  if (!glass) return 0;
+  const candidates: number[] = [toPositive(glass.diameterMm)];
+
+  if (glass.hasSteppedProfile) {
+    candidates.push(toPositive(glass.largeDiameterMm), toPositive(glass.smallDiameterMm));
+  }
+
+  if (glass.advancedProfile?.enabled) {
+    candidates.push(toPositive(glass.advancedProfile.maxDiameterMm));
+    (glass.advancedProfile.sections ?? []).forEach((section) => {
+      candidates.push(toPositive(section.diameterMm));
+    });
+  }
+
+  if (glass.advancedProfileEnabled) {
+    (glass.profileSegments ?? []).forEach((segment) => {
+      candidates.push(toPositive(segment.diameterMm));
+    });
+  }
+
+  return Math.max(0, ...candidates);
+}
+
+function resolveCascadeSourceGlass(
+  project: LensProject,
+  preferredSource?: StackItem
+): Extract<StackItem, { type: "glass" }> | undefined {
+  if (preferredSource?.type === "glass") return preferredSource;
+  const glasses = project.stackItems.filter(
+    (item): item is Extract<StackItem, { type: "glass" }> => item.type === "glass"
+  );
+  if (!glasses.length) return undefined;
+  return glasses.reduce((best, current) =>
+    getMeasuredGlassMaxDiameterMm(current) > getMeasuredGlassMaxDiameterMm(best) ? current : best
+  );
+}
+
 function getGlassProfileLengthMm(glass?: Extract<StackItem, { type: "glass" }>): number | undefined {
   if (!glass) return undefined;
 
@@ -256,26 +308,128 @@ function resolveSlidingCarrierLengthMm({
   project,
   sourceGlass,
   defaults,
-  focusTravelMm,
+  fallbackLengthMm,
   lengthSource,
   manualLengthMm
 }: {
   project: LensProject;
   sourceGlass: Extract<StackItem, { type: "glass" }> | undefined;
   defaults: CadDefaults;
-  focusTravelMm: number;
+  fallbackLengthMm: number;
   lengthSource: SlidingCarrierLengthSource;
   manualLengthMm: number;
-}): number {
+}): { lengthMm: number; source: CarrierLengthDerivedSource } {
   if (lengthSource === "manual") {
     const manual = Number.isFinite(manualLengthMm) ? manualLengthMm : 0;
-    return Number(Math.max(8, manual).toFixed(3));
+    return { lengthMm: Number(Math.max(8, manual).toFixed(3)), source: "manual" };
   }
 
   const cupDepthMm = estimateLensCupDepthMm(sourceGlass, defaults);
+  if (cupDepthMm && cupDepthMm > 0) {
+    return {
+      lengthMm: Number(Math.max(MIN_CARRIER_LENGTH_MM, Math.min(cupDepthMm + CARRIER_LENGTH_MARGIN_MM, MAX_CARRIER_LENGTH_MM)).toFixed(3)),
+      source: "cup_depth"
+    };
+  }
   const stackLengthMm = getTotalStackLength(project.stackItems);
-  const baseLengthMm = cupDepthMm ?? (stackLengthMm > 0 ? stackLengthMm : undefined) ?? focusTravelMm;
-  return Number(Math.max(18, Math.min(baseLengthMm + 3.0, 120)).toFixed(3));
+  if (stackLengthMm > 0) {
+    return {
+      lengthMm: Number(Math.max(MIN_CARRIER_LENGTH_MM, Math.min(stackLengthMm + CARRIER_LENGTH_MARGIN_MM, MAX_CARRIER_LENGTH_MM)).toFixed(3)),
+      source: "optical_stack_length"
+    };
+  }
+  const fallback = Number.isFinite(fallbackLengthMm) ? fallbackLengthMm : 0;
+  return { lengthMm: Number(Math.max(8, fallback).toFixed(3)), source: "manual" };
+}
+
+function deriveCascadeSizing({
+  project,
+  preferredSource,
+  defaults,
+  focusDerived,
+  plSlotLengthManual,
+  slidingCarrierOverrides
+}: {
+  project: LensProject;
+  preferredSource?: StackItem;
+  defaults: CadDefaults;
+  focusDerived: ReturnType<typeof getFocusTravelDerived>;
+  plSlotLengthManual: number;
+  slidingCarrierOverrides?: SlidingCarrierOverrides;
+}): CascadeSizing {
+  const sourceGlass = resolveCascadeSourceGlass(project, preferredSource);
+  const measuredSourceGlassMaxDiameter = getMeasuredGlassMaxDiameterMm(sourceGlass);
+  const fallbackLargestGlassDiameter = getLargestGlassDiameter(project.stackItems);
+  const sourceGlassMaxDiameterMm =
+    measuredSourceGlassMaxDiameter > 0 ? measuredSourceGlassMaxDiameter : fallbackLargestGlassDiameter;
+
+  const cupDepthMm = estimateLensCupDepthMm(sourceGlass, defaults);
+  const cupOuterDiameterMm =
+    sourceGlassMaxDiameterMm > 0
+      ? Number((sourceGlassMaxDiameterMm + defaults.wallThicknessMm * 2).toFixed(3))
+      : undefined;
+
+  const focusTravelMm = focusDerived.recommendedPrototypeTravelMm ?? plSlotLengthManual;
+  const carrierLengthResolved = resolveSlidingCarrierLengthMm({
+    project,
+    sourceGlass,
+    defaults,
+    fallbackLengthMm: slidingCarrierOverrides?.manualLengthMm ?? focusTravelMm,
+    lengthSource: slidingCarrierOverrides?.lengthSource ?? "lens_cup_or_stack",
+    manualLengthMm: slidingCarrierOverrides?.manualLengthMm ?? 48
+  });
+
+  const carrierInnerBaseSource: CarrierInnerBaseSource =
+    cupOuterDiameterMm && cupOuterDiameterMm > 0 ? "cup_outer_diameter" : "largest_glass_diameter";
+  const carrierInnerBaseDiameter =
+    carrierInnerBaseSource === "cup_outer_diameter" ? (cupOuterDiameterMm as number) : sourceGlassMaxDiameterMm;
+  const carrierFitClearanceMm = Math.max(
+    MIN_CARRIER_FIT_CLEARANCE_DIAMETER_MM,
+    (defaults.radialClearanceMm + defaults.printToleranceMm) * 2
+  );
+  const carrierInnerDiameterMm = Number(
+    Math.max(carrierInnerBaseDiameter + carrierFitClearanceMm, defaults.defaultInnerDiameterMm - 2).toFixed(3)
+  );
+  const carrierOuterDiameterMm = Number((carrierInnerDiameterMm + defaults.wallThicknessMm * 2).toFixed(3));
+
+  const slidingClearanceMm = DEFAULT_SLIDING_CLEARANCE_DIAMETER_MM;
+  const fixedBarrelInnerDiameterMm = Number((carrierOuterDiameterMm + slidingClearanceMm).toFixed(3));
+
+  const slotLengthSource: SlotLengthSource =
+    focusDerived.recommendedPrototypeTravelMm && focusDerived.recommendedPrototypeTravelMm > 0
+      ? "focus_travel"
+      : "manual_default";
+  const slotLengthBase = focusDerived.recommendedPrototypeTravelMm ?? plSlotLengthManual;
+  const slotLengthMm = Number(Math.max(slotLengthBase + 2, 6).toFixed(3));
+  const slotStartFromMainBarrelMm = Math.max(0, defaults.plSlotStartFromMainBarrelMm ?? 8.0);
+  const barrelEndMarginMm = DEFAULT_BARREL_END_MARGIN_MM;
+  const derivedMainBarrelLengthMm = slotStartFromMainBarrelMm + slotLengthMm + barrelEndMarginMm;
+  const requestedMainBarrelLengthMm = Number.isFinite(defaults.plMainBarrelLengthMm ?? Number.NaN)
+    ? (defaults.plMainBarrelLengthMm as number)
+    : undefined;
+  const mainBarrelLengthMm = Number(
+    Math.max(derivedMainBarrelLengthMm, requestedMainBarrelLengthMm ?? derivedMainBarrelLengthMm).toFixed(3)
+  );
+
+  return {
+    sourceGlass,
+    sourceGlassMaxDiameterMm,
+    cupDepthMm,
+    cupOuterDiameterMm,
+    carrierLengthMm: carrierLengthResolved.lengthMm,
+    carrierLengthSource: carrierLengthResolved.source,
+    carrierInnerDiameterMm,
+    carrierInnerBaseSource,
+    carrierOuterDiameterMm,
+    carrierFitClearanceMm,
+    fixedBarrelInnerDiameterMm,
+    slidingClearanceMm,
+    slotLengthMm,
+    slotLengthSource,
+    slotStartFromMainBarrelMm,
+    barrelEndMarginMm,
+    mainBarrelLengthMm
+  };
 }
 
 function getAdvancedProfileSectionSum(profile: ElementCupParams["advancedProfile"] | undefined): number {
@@ -332,7 +486,8 @@ function createPayload(
   partType: CadPartType,
   source?: StackItem,
   fixedPlOverrides?: { barrelAttachZMm: number; plOverlapMm: number },
-  slidingCarrierOverrides?: SlidingCarrierOverrides
+  slidingCarrierOverrides?: SlidingCarrierOverrides,
+  cascadeSizing?: CascadeSizing
 ): ScadPayload {
   const defaults = project.cadDefaults;
   const sourceName = source?.name ?? "part";
@@ -344,7 +499,6 @@ function createPayload(
   const plLockClearanceLength = defaults.plLockingClearanceLengthMm ?? 12.0;
   const plLockClearanceDiameter = defaults.plLockingClearanceDiameterMm ?? 42.0;
   const plMainBarrelInnerDefault = defaults.plMainBarrelInnerDiameterMm ?? 40.0;
-  const plMainBarrelLengthDefault = defaults.plMainBarrelLengthMm ?? 50.0;
   const plStepUpStart = defaults.plStepUpStartFromFlangeMm ?? 12.0;
   const plSlotCount = Math.max(2, Math.round(defaults.plSlotCount ?? 2));
   const plSlotAngleOffset = defaults.plSlotAngleOffsetDeg ?? 0;
@@ -352,15 +506,22 @@ function createPayload(
   const plSlotStartZ = defaults.plSlotStartZMm ?? 13.0;
   const plPinDiameter = Math.max(1, defaults.plPinDiameterMm ?? defaults.camPinDiameterMm ?? 2);
   const plPinClearance = Math.max(0.1, defaults.plPinClearanceMm ?? 0.3);
-  const plAssemblyIncludeMain = defaults.plAssemblyIncludeMainBarrelSection ?? true;
-  const plAssemblyIncludeCarrier = defaults.plAssemblyIncludeMovingCarrier ?? true;
-  const plAssemblyIncludePins = defaults.plAssemblyIncludeGuidePins ?? true;
-  const plAssemblyFuse = defaults.plAssemblyFuseBarrelToPl ?? false;
-  const plStepReferencePath = resolvePlStepPath(defaults.plStepReferencePath);
+  const cascade =
+    cascadeSizing ??
+    deriveCascadeSizing({
+      project,
+      preferredSource: source,
+      defaults,
+      focusDerived,
+      plSlotLengthManual,
+      slidingCarrierOverrides
+    });
 
   switch (partType) {
     case "element_cup": {
-      const glass = source?.type === "glass" ? source : undefined;
+      const glass =
+        (source?.type === "glass" ? source : undefined) ??
+        cascade.sourceGlass;
       const rearLipMm = getElementCupRearLipDefaultMm(glass, defaults);
       const advancedProfile = normalizeAdvancedProfileForCup(glass);
       const steppedLargeDiameterMm = toPositive(glass?.largeDiameterMm);
@@ -396,29 +557,13 @@ function createPayload(
         profileSegments.length > 0
           ? profileSegments.reduce((sum, segment) => sum + segment.depthMm, 0)
           : undefined;
-      const glassDiameterMm = glass?.diameterMm ?? defaults.defaultInnerDiameterMm - 4;
+      const glassDiameterMm =
+        cascade.sourceGlassMaxDiameterMm > 0 ? cascade.sourceGlassMaxDiameterMm : (glass?.diameterMm ?? defaults.defaultInnerDiameterMm - 4);
       const seatClearanceMm = defaults.printToleranceMm;
-      const seatDiameterMm = glassDiameterMm + seatClearanceMm;
-      const minimumOuterFromSeat = seatDiameterMm + Math.max(defaults.wallThicknessMm * 2, 1.6);
-      const nearestBarrelInner = getNearestBarrelInnerDiameter(project.stackItems, source);
-      const recommendedBarrelInner = getRecommendedBarrelInnerDiameter(project.stackItems, defaults);
-      const effectiveBarrelInner = Math.max(
-        toPositive(nearestBarrelInner),
-        toPositive(recommendedBarrelInner)
-      );
-      const fitClearancePerSide = Math.max(defaults.radialClearanceMm + defaults.printToleranceMm, 0.25);
-      const barrelFitOuter =
-        effectiveBarrelInner > 0
-          ? effectiveBarrelInner - fitClearancePerSide * 2
-          : undefined;
-      const resolvedOuterDiameter = Math.max(
-        minimumOuterFromSeat,
-        barrelFitOuter ?? minimumOuterFromSeat
-      );
-      const resolvedWallThickness = Math.max(
-        defaults.wallThicknessMm,
-        (resolvedOuterDiameter - seatDiameterMm) / 2
-      );
+      const resolvedOuterDiameter =
+        cascade.cupOuterDiameterMm && cascade.cupOuterDiameterMm > 0
+          ? cascade.cupOuterDiameterMm
+          : Number((glassDiameterMm + defaults.wallThicknessMm * 2).toFixed(3));
 
       return {
         type: "element_cup",
@@ -430,10 +575,11 @@ function createPayload(
           advancedProfile,
           profileSegments: profileSegments.length ? profileSegments : undefined,
           seatClearanceMm,
-          wallThicknessMm: Number(resolvedWallThickness.toFixed(3)),
+          wallThicknessMm: Number(defaults.wallThicknessMm.toFixed(3)),
           outerDiameterMm: Number(resolvedOuterDiameter.toFixed(3)),
           retainingLipMm: defaults.retainingLipMm,
           rearLipMm: Number(rearLipMm.toFixed(3)),
+          cupDepthMm: cascade.cupDepthMm ? Number(cascade.cupDepthMm.toFixed(3)) : undefined,
           facets: defaults.facets
         }
       };
@@ -507,10 +653,13 @@ function createPayload(
       };
     }
     case "fixed_pl_barrel_with_slots": {
-      const recommendedInner = getRecommendedBarrelInnerDiameter(project.stackItems, defaults);
+      const requestedMainBarrelInner = Number.isFinite(defaults.plMainBarrelInnerDiameterMm ?? Number.NaN)
+        ? (defaults.plMainBarrelInnerDiameterMm as number)
+        : undefined;
       const mainBarrelInner = Math.max(
         plMainBarrelInnerDefault,
-        Number(recommendedInner.toFixed(3))
+        cascade.fixedBarrelInnerDiameterMm,
+        requestedMainBarrelInner ?? 0
       );
       const defaultMainBarrelOuter = Number((mainBarrelInner + 4.0).toFixed(3));
       const requestedMainBarrelOuter = Number.isFinite(defaults.plMainBarrelOuterDiameterMm ?? Number.NaN)
@@ -523,11 +672,7 @@ function createPayload(
       const pinDiameter = plPinDiameter;
       const pinClearance = plPinClearance;
       const slotWidth = Number((pinDiameter + pinClearance).toFixed(3));
-      const slotLength = Number(
-        (
-          (focusDerived.recommendedPrototypeTravelMm ?? plSlotLengthManual) + 2
-        ).toFixed(3)
-      );
+      const slotLength = cascade.slotLengthMm;
       const defaultPlClearanceOuter = Number((mainBarrelInner + 1.5).toFixed(3));
       const requestedPlClearanceOuter = Number.isFinite(defaults.plClearanceOuterDiameterMm ?? Number.NaN)
         ? (defaults.plClearanceOuterDiameterMm as number)
@@ -540,15 +685,12 @@ function createPayload(
         ).toFixed(3)
       );
       const plClearanceLength = Math.max(0.1, defaults.plClearanceLengthMm ?? 4.0);
-      const slotStartFromMainBarrel = Math.max(0, defaults.plSlotStartFromMainBarrelMm ?? 8.0);
+      const slotStartFromMainBarrel = cascade.slotStartFromMainBarrelMm;
       const stepUpStart = Math.max(
         plLockClearanceLength,
         plStepUpStart
       );
-      const mainBarrelLength = Math.max(
-        0.1,
-        plMainBarrelLengthDefault
-      );
+      const mainBarrelLength = Math.max(0.1, cascade.mainBarrelLengthMm);
       const totalLength = Number((stepUpStart + mainBarrelLength).toFixed(3));
       const plReferenceStlPath = derivePlStlPathFromStepPath(defaults.plStepReferencePath);
       const rawRotateX = project.cadDefaults.plImportedStlRotateXDeg ?? 0;
@@ -622,35 +764,7 @@ function createPayload(
       };
     }
     case "sliding_optical_carrier": {
-      const glass = source?.type === "glass" ? source : undefined;
-      const largestGlassDiameter = getLargestGlassDiameter(project.stackItems);
-      const fixedInner = Math.max(
-        plMainBarrelInnerDefault,
-        getRecommendedBarrelInnerDiameter(project.stackItems, defaults)
-      );
-      const desiredCarrierClearance = 0.8;
-      const carrierOuter = Number(
-        Math.max(
-          largestGlassDiameter + defaults.radialClearanceMm * 2 + 0.8,
-          fixedInner - desiredCarrierClearance
-        ).toFixed(3)
-      );
-      const carrierInner = Number(
-        Math.max(
-          largestGlassDiameter + defaults.radialClearanceMm * 2 + 0.4,
-          defaults.defaultInnerDiameterMm - 2
-        ).toFixed(3)
-      );
-      const focusTravelMm =
-        focusDerived.recommendedPrototypeTravelMm ?? plSlotLengthManual;
-      const carrierLength = resolveSlidingCarrierLengthMm({
-        project,
-        sourceGlass: glass,
-        defaults,
-        focusTravelMm,
-        lengthSource: slidingCarrierOverrides?.lengthSource ?? "lens_cup_or_stack",
-        manualLengthMm: slidingCarrierOverrides?.manualLengthMm ?? 48
-      });
+      const carrierLength = cascade.carrierLengthMm;
       const pinHoleDiameter = Number((plPinDiameter + plPinClearance).toFixed(3));
       const pinBossDiameter = Number((pinHoleDiameter + 3).toFixed(3));
       const pinHoleZ = Number((carrierLength * 0.5).toFixed(3));
@@ -658,8 +772,8 @@ function createPayload(
         type: "sliding_optical_carrier",
         params: {
           partName,
-          innerDiameterMm: Math.min(carrierInner, carrierOuter - 0.8),
-          outerDiameterMm: Math.max(carrierOuter, carrierInner + 0.8),
+          innerDiameterMm: cascade.carrierInnerDiameterMm,
+          outerDiameterMm: cascade.carrierOuterDiameterMm,
           lengthMm: carrierLength,
           startZMm: 0,
           pinHoleCount: 2,
@@ -754,6 +868,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const plAssemblyIncludePins = project.cadDefaults.plAssemblyIncludeGuidePins ?? true;
   const plAssemblyFuse = project.cadDefaults.plAssemblyFuseBarrelToPl ?? false;
   const plStepReferencePath = resolvePlStepPath(project.cadDefaults.plStepReferencePath);
+  const focusDerived = getFocusTravelDerived(project);
+  const plSlotLengthManual = project.cadDefaults.plSlotLengthManualMm ?? 30.0;
 
   const sourceCandidates = useMemo(() => {
     const requiredType = needsSource[partType];
@@ -775,6 +891,18 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   }, [project.cadDefaults.plBarrelAttachZMm, project.cadDefaults.plReferenceOverlapMm]);
 
   const sourceItem = sourceCandidates.find((item) => item.id === sourceItemId);
+  const slidingCarrierOverrides: SlidingCarrierOverrides = {
+    lengthSource: slidingCarrierLengthSource,
+    manualLengthMm: slidingCarrierManualLengthMm
+  };
+  const cascadeSizing = deriveCascadeSizing({
+    project,
+    preferredSource: sourceItem,
+    defaults: project.cadDefaults,
+    focusDerived,
+    plSlotLengthManual,
+    slidingCarrierOverrides
+  });
   const fixedPlOverrides =
     partType === "fixed_pl_barrel_with_slots"
       ? {
@@ -782,23 +910,21 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
           plOverlapMm: fixedPlOverlapMm
         }
       : undefined;
-  const slidingCarrierOverrides: SlidingCarrierOverrides = {
-    lengthSource: slidingCarrierLengthSource,
-    manualLengthMm: slidingCarrierManualLengthMm
-  };
   const payload = createPayload(
     project,
     partType,
     sourceItem,
     fixedPlOverrides,
-    slidingCarrierOverrides
+    slidingCarrierOverrides,
+    cascadeSizing
   );
   const slidingCarrierPayloadForAssembly = createPayload(
     project,
     "sliding_optical_carrier",
     sourceItem,
     undefined,
-    slidingCarrierOverrides
+    slidingCarrierOverrides,
+    cascadeSizing
   );
   const slidingCarrierParamsForAssembly =
     slidingCarrierPayloadForAssembly.type === "sliding_optical_carrier"
@@ -813,7 +939,6 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     }
     if (payload.type === "fixed_pl_barrel_with_slots") {
       if (slidingCarrierParamsForAssembly) {
-        const focus = getFocusTravelDerived(project);
         return {
           type: "sliding_focus_assembly",
           params: {
@@ -827,9 +952,9 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
             guidePinDiameterMm: payload.params.pinDiameterMm,
             guidePinLengthMm: Math.max(payload.params.slotWidthMm * 4, 8),
             fuseBarrelToPl: plAssemblyFuse,
-            focusPrototypeStartMm: focus.prototypeStartMm,
-            recommendedPrototypeTravelMm: focus.recommendedPrototypeTravelMm,
-            targetMountThroatDiameterMm: focus.targetMountThroatDiameterMm
+            focusPrototypeStartMm: focusDerived.prototypeStartMm,
+            recommendedPrototypeTravelMm: focusDerived.recommendedPrototypeTravelMm,
+            targetMountThroatDiameterMm: focusDerived.targetMountThroatDiameterMm
           }
         };
       }
@@ -865,8 +990,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const slidingCarrierValidationWarnings = (() => {
     if (payload.type !== "sliding_optical_carrier") return [] as string[];
     const fixedBarrelInnerDiameter = Math.max(
-      project.cadDefaults.plMainBarrelInnerDiameterMm ?? 40.0,
-      getRecommendedBarrelInnerDiameter(project.stackItems, project.cadDefaults)
+      cascadeSizing.fixedBarrelInnerDiameterMm,
+      project.cadDefaults.plMainBarrelInnerDiameterMm ?? 0
     );
     const warnings: string[] = [];
     if (payload.params.addPinBosses) {
@@ -944,11 +1069,14 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     };
 
     if (payload.type === "element_cup") {
+      values.source_glass_max_diameter = `${pretty(cascadeSizing.sourceGlassMaxDiameterMm)} mm`;
       values.glass_diameter = `${pretty(payload.params.glassDiameterMm)} mm`;
       values.glass_thickness = `${pretty(payload.params.glassThicknessMm)} mm`;
       values.seat_clearance = `${pretty(payload.params.seatClearanceMm)} mm`;
       values.wall_thickness = `${pretty(payload.params.wallThicknessMm)} mm`;
       values.outer_diameter = `${pretty(payload.params.outerDiameterMm ?? 0)} mm`;
+      values.cup_depth = `${pretty(payload.params.cupDepthMm ?? cascadeSizing.cupDepthMm ?? 0)} mm`;
+      values.cup_outer_diameter = `${pretty(payload.params.outerDiameterMm ?? cascadeSizing.cupOuterDiameterMm ?? 0)} mm`;
       values.profile_segments = payload.params.profileSegments?.length ?? 0;
       if (payload.params.advancedProfile?.enabled) {
         const sectionSum = getAdvancedProfileSectionSum(payload.params.advancedProfile);
@@ -1026,6 +1154,19 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     }
 
     if (payload.type === "fixed_pl_barrel_with_slots") {
+      values.source_glass_max_diameter = `${pretty(cascadeSizing.sourceGlassMaxDiameterMm)} mm`;
+      values.cup_depth = `${pretty(cascadeSizing.cupDepthMm ?? 0)} mm`;
+      values.cup_outer_diameter = `${pretty(cascadeSizing.cupOuterDiameterMm ?? 0)} mm`;
+      values.carrier_length_source =
+        cascadeSizing.carrierLengthSource === "cup_depth"
+          ? "cup depth + 3.0mm"
+          : cascadeSizing.carrierLengthSource === "optical_stack_length"
+            ? "optical stack length + 3.0mm"
+            : "manual";
+      values.carrier_od = `${pretty(cascadeSizing.carrierOuterDiameterMm)} mm`;
+      values.fixed_barrel_id = `${pretty(payload.params.mainBarrelInnerDiameterMm)} mm`;
+      values.slot_length_source =
+        cascadeSizing.slotLengthSource === "focus_travel" ? "focus travel" : "manual/default";
       values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
       values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
       values.total_length = `${pretty(payload.params.lengthMm)} mm`;
@@ -1049,6 +1190,19 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     }
 
     if (payload.type === "sliding_optical_carrier") {
+      values.source_glass_max_diameter = `${pretty(cascadeSizing.sourceGlassMaxDiameterMm)} mm`;
+      values.cup_depth = `${pretty(cascadeSizing.cupDepthMm ?? 0)} mm`;
+      values.cup_outer_diameter = `${pretty(cascadeSizing.cupOuterDiameterMm ?? 0)} mm`;
+      values.carrier_length_source =
+        cascadeSizing.carrierLengthSource === "cup_depth"
+          ? "cup depth + 3.0mm"
+          : cascadeSizing.carrierLengthSource === "optical_stack_length"
+            ? "optical stack length + 3.0mm"
+            : "manual";
+      values.carrier_od = `${pretty(payload.params.outerDiameterMm)} mm`;
+      values.fixed_barrel_id = `${pretty(cascadeSizing.fixedBarrelInnerDiameterMm)} mm`;
+      values.slot_length_source =
+        cascadeSizing.slotLengthSource === "focus_travel" ? "focus travel" : "manual/default";
       values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
       values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
       values.length = `${pretty(payload.params.lengthMm)} mm`;
@@ -1065,7 +1219,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     values.rotation_degrees = payload.params.rotationDegrees;
     values.axial_travel = `${pretty(payload.params.axialTravelMm)} mm`;
     return values;
-  }, [payload]);
+  }, [payload, cascadeSizing]);
 
   const safetyWarnings = [
     "CAD output is a starting point for prototyping.",
