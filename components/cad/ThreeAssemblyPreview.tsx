@@ -74,10 +74,7 @@ function shouldShowPartByRole(
   if (part.colorRole === "cup" || part.colorRole === "spacer" || part.colorRole === "ring") {
     return options.showCupsAndSpacers;
   }
-  if (part.colorRole === "insert" || part.type === "iris" || part.type === "filter" || part.type === "diffusion") {
-    return options.showInserts;
-  }
-  if (part.type === "custom" && part.colorRole !== "custom") {
+  if (part.colorRole === "insert") {
     return options.showInserts;
   }
   if (part.colorRole === "custom") {
