@@ -321,37 +321,93 @@ function getPackageBaseFileName(projectName: string): string {
   return `TimoSasaki_${safeProjectName}`;
 }
 
-function getPayloadFootprintMm(payload: ScadPayload): { widthMm: number; depthMm: number; xOffsetMm: number; yOffsetMm: number; zLiftMm: number } {
+type SmallPartPrintOrientation = "cup_open_up" | "flat" | "upright_pin";
+
+type SmallPartPrintPlacement = {
+  orientation: SmallPartPrintOrientation;
+  cupRequiresFlipForPrint?: boolean;
+  cupFlipLiftMm?: number;
+};
+
+function getCompleteAdvancedProfileSections(params: ElementCupParams): Array<{ diameterMm: number; lengthMm: number; index: number }> {
+  const sections = params.advancedProfile?.sections ?? [];
+  return sections
+    .slice()
+    .sort((a, b) => a.index - b.index)
+    .filter((section) => toPositive(section.diameterMm) > 0 && toPositive(section.lengthMm) > 0)
+    .map((section) => ({
+      index: section.index,
+      diameterMm: section.diameterMm,
+      lengthMm: section.lengthMm
+    }));
+}
+
+function isAdvancedCupModelUsedForElementCup(params: ElementCupParams): boolean {
+  if (!params.advancedProfile?.enabled) return false;
+  if (toPositive(params.advancedProfile.maxDiameterMm) <= 0) return false;
+  if (toPositive(params.advancedProfile.totalLengthMm) <= 0) return false;
+  const sections = getCompleteAdvancedProfileSections(params);
+  if (!sections.length) return false;
+  return sections.length === (params.advancedProfile.sections ?? []).length;
+}
+
+function getAdvancedCupDepthMm(params: ElementCupParams): number {
+  const sections = getCompleteAdvancedProfileSections(params);
+  const sectionSumMm = sections.reduce((sum, section) => sum + toPositive(section.lengthMm), 0);
+  const rearLipMm = toPositive(params.rearLipMm);
+  const baseDepthMm = sectionSumMm + rearLipMm;
+  const explicitCupDepthMm = toPositive(params.cupDepthMm);
+  if (explicitCupDepthMm > 0) {
+    return Math.max(baseDepthMm, explicitCupDepthMm);
+  }
+  return baseDepthMm + 0.5;
+}
+
+function getSmallPartPrintPlacement(payload: ScadPayload): SmallPartPrintPlacement {
+  if (payload.type === "element_cup") {
+    const usesAdvancedCupModel = isAdvancedCupModelUsedForElementCup(payload.params);
+    return {
+      orientation: "cup_open_up",
+      cupRequiresFlipForPrint: usesAdvancedCupModel,
+      cupFlipLiftMm: usesAdvancedCupModel ? getAdvancedCupDepthMm(payload.params) : 0
+    };
+  }
+  if (payload.type === "guide_pin") {
+    return { orientation: "upright_pin" };
+  }
+  return { orientation: "flat" };
+}
+
+function getPayloadFootprintMm(payload: ScadPayload): { widthMm: number; depthMm: number; xOffsetMm: number; yOffsetMm: number } {
   if (payload.type === "element_cup") {
     const d = Math.max(2, toPositive(payload.params.outerDiameterMm) || toPositive(payload.params.glassDiameterMm));
-    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2, zLiftMm: 0 };
+    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2 };
   }
   if (payload.type === "spacer_ring") {
     const d = Math.max(2, toPositive(payload.params.outerDiameterMm));
-    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2, zLiftMm: 0 };
+    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2 };
   }
   if (payload.type === "iris_disk") {
     const d = Math.max(2, toPositive(payload.params.diskDiameterMm));
-    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2, zLiftMm: 0 };
+    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2 };
   }
   if (payload.type === "diffusion_holder") {
     const d = Math.max(2, toPositive(payload.params.diskDiameterMm) + toPositive(payload.params.wallThicknessMm) * 2);
-    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2, zLiftMm: 0 };
+    return { widthMm: d, depthMm: d, xOffsetMm: d / 2, yOffsetMm: d / 2 };
   }
   if (payload.type === "guide_pin") {
-    const shaftLengthMm = Math.max(1, toPositive(payload.params.pinShaftLengthMm));
     const headDiameterMm = Math.max(1, toPositive(payload.params.pinHeadDiameterMm));
     const quantity = Math.max(1, Math.round(payload.params.quantity));
-    const depthMm = quantity * headDiameterMm + (quantity - 1) * 2.0;
+    const depthMm = quantity * headDiameterMm + (quantity - 1) * 2.0 + 2.0;
+    const widthMm = headDiameterMm + 2.0;
     return {
-      widthMm: shaftLengthMm,
+      widthMm,
       depthMm,
-      xOffsetMm: 0,
-      yOffsetMm: headDiameterMm / 2,
-      zLiftMm: headDiameterMm / 2
+      xOffsetMm: widthMm / 2,
+      yOffsetMm: depthMm / 2
     };
   }
-  return { widthMm: 30, depthMm: 30, xOffsetMm: 15, yOffsetMm: 15, zLiftMm: 0 };
+  return { widthMm: 30, depthMm: 30, xOffsetMm: 15, yOffsetMm: 15 };
 }
 
 function buildSmallPartsPlateScad(parts: PackageSmallPart[]): string {
@@ -375,8 +431,7 @@ function buildSmallPartsPlateScad(parts: PackageSmallPart[]): string {
     }
     const placement = {
       xMm: cursorX + footprint.xOffsetMm,
-      yMm: cursorY + footprint.yOffsetMm,
-      zMm: footprint.zLiftMm
+      yMm: cursorY + footprint.yOffsetMm
     };
     cursorX += widthWithSpacing;
     rowDepthMm = Math.max(rowDepthMm, depthWithSpacing);
@@ -399,17 +454,62 @@ ${indentScadCode(code, 2)}
     .map((entry, index) => {
       const moduleName = `part_${String(index + 1).padStart(2, "0")}_${sanitizeScadModuleName(entry.label)}`;
       const placement = placements[index];
-      return `translate([${formatScadValue(placement.xMm)}, ${formatScadValue(placement.yMm)}, ${formatScadValue(placement.zMm)}]) ${moduleName}();`;
+      const printPlacement = getSmallPartPrintPlacement(entry.payload);
+
+      if (printPlacement.orientation === "cup_open_up") {
+        const flipForPrint = printPlacement.cupRequiresFlipForPrint ? "true" : "false";
+        const flipLiftMm = formatScadValue(toPositive(printPlacement.cupFlipLiftMm));
+        return `printPlaceLensCup(${formatScadValue(placement.xMm)}, ${formatScadValue(placement.yMm)}, ${flipForPrint}, ${flipLiftMm}) ${moduleName}();`;
+      }
+
+      if (printPlacement.orientation === "upright_pin") {
+        return `printPlaceGuidePin(${formatScadValue(placement.xMm)}, ${formatScadValue(placement.yMm)}) ${moduleName}();`;
+      }
+
+      if (entry.payload.type === "iris_disk" || entry.payload.type === "diffusion_holder") {
+        return `printPlaceDisk(${formatScadValue(placement.xMm)}, ${formatScadValue(placement.yMm)}) ${moduleName}();`;
+      }
+
+      return `printPlaceRing(${formatScadValue(placement.xMm)}, ${formatScadValue(placement.yMm)}) ${moduleName}();`;
     })
     .join("\n");
 
   return `// Timo Sasaki Lens Lab — Build All Parts Package (small parts plate)
 // Small parts grouped on one OpenSCAD print plate.
 // Carrier and fixed PL barrel are exported as separate files.
+// Print orientation: cups open-side-up, spacers/disks flat, guide pins upright.
 
 part_spacing_mm = ${formatScadValue(partSpacingMm)};
 row_spacing_mm = ${formatScadValue(rowSpacingMm)};
 plate_margin_mm = ${formatScadValue(plateMarginMm)};
+
+module printPlaceLensCup(x, y, flip_for_print = false, flip_lift_mm = 0) {
+  translate([x, y, 0]) {
+    if (flip_for_print) {
+      translate([0, 0, flip_lift_mm])
+        rotate([180, 0, 0])
+          children();
+    } else {
+      children();
+    }
+  }
+}
+
+module printPlaceRing(x, y) {
+  translate([x, y, 0])
+    children();
+}
+
+module printPlaceDisk(x, y) {
+  translate([x, y, 0])
+    children();
+}
+
+module printPlaceGuidePin(x, y) {
+  translate([x, y, 0])
+    rotate([0, -90, 0])
+      children();
+}
 
 ${moduleBlocks}
 // Placement
@@ -2525,10 +2625,10 @@ Generated parts on small parts plate:
 ${generatedPartLabels.map((label) => `- ${label}`).join("\n")}
 
 Print notes:
-- Small parts plate: print flat as generated, supports off.
+- Small parts plate: automatically orients cups open-side-up, spacers/disks flat, and guide pins upright. Inspect preview before printing.
 - Sliding optical carrier: print upright, supports off, clean pin holes after print.
 - Fixed PL barrel: print PL/flange side on bed if possible, supports off, inspect slot edges.
-- Guide pins: print flat as generated, then test-fit through slot and carrier hole.
+- Guide pins: upright pins can be fragile on FDM; add a small brim/raft if bed adhesion needs help.
 
 Warnings:
 ${dedupWarnings.length ? dedupWarnings.map((line) => `- ${line}`).join("\n") : "- none"}
