@@ -157,17 +157,14 @@ export function calculateAirspaceInsertLayout(
   if (thicknessMm >= desiredOpticalAirGapMm) {
     warnings.push("Inserted item is too thick for this airspace.");
   }
-  if (spacerBeforeMm < 0) {
-    warnings.push("Insert position is too far forward.");
-  }
-  if (spacerAfterMm < 0) {
-    warnings.push("Insert position is too far rearward.");
+  if (spacerBeforeMm < 0 || spacerAfterMm < 0) {
+    warnings.push("Insert position does not fit inside this airspace.");
   }
   if (spacerBeforeMm >= 0 && spacerBeforeMm < 0.4) {
-    warnings.push("Spacer is very thin for FDM printing.");
+    warnings.push("Calculated spacer is very thin for FDM printing.");
   }
   if (spacerAfterMm >= 0 && spacerAfterMm < 0.4) {
-    warnings.push("Spacer is very thin for FDM printing.");
+    warnings.push("Calculated spacer is very thin for FDM printing.");
   }
   if (item.positionMode === "manual_split") {
     const splitTotal = spacerBeforeMm + thicknessMm + spacerAfterMm;
@@ -240,4 +237,3 @@ export function createDefaultAirspaceInsertedItem(params: {
     positionMode: "centered"
   };
 }
-

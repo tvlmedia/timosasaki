@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/common/Button";
+import { calculateAirspaceInsertLayouts } from "@/lib/airspaceInserts";
 import { getItemOpticalType, getItemOpticalTypeLabel } from "@/lib/stackMeta";
 import type { StackItem } from "@/types";
 
@@ -30,6 +31,36 @@ function startCase(value: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function getSpacerInsertSummary(item: Extract<StackItem, { type: "spacer" }>): {
+  insertLine?: string;
+  printLine?: string;
+} {
+  const desiredOpticalAirGapMm =
+    typeof item.desiredOpticalAirGapMm === "number" && Number.isFinite(item.desiredOpticalAirGapMm)
+      ? item.desiredOpticalAirGapMm
+      : item.thicknessMm;
+  const layouts = calculateAirspaceInsertLayouts(desiredOpticalAirGapMm, item.insertedItems);
+  if (!layouts.length) return {};
+
+  const first = layouts[0];
+  const typeLabel = startCase(first.item.type);
+  const thicknessLabel = formatMm(first.item.thicknessMm) ?? `${first.item.thicknessMm.toFixed(3)}mm`;
+  const firstInsertLine = `Insert: ${typeLabel} ${thicknessLabel}`;
+  const firstPrintLine = `Print: ${first.spacerBeforeMm.toFixed(3)} + ${first.item.type} + ${first.spacerAfterMm.toFixed(3)}`;
+
+  if (layouts.length === 1) {
+    return {
+      insertLine: firstInsertLine,
+      printLine: firstPrintLine
+    };
+  }
+
+  return {
+    insertLine: `${firstInsertLine} (+${layouts.length - 1} more)`,
+    printLine: firstPrintLine
+  };
 }
 
 function getGlassDescriptor(item: Extract<StackItem, { type: "glass" }>): string {
@@ -167,6 +198,7 @@ export function StackItemCard({
   const borderClass = colorByOpticalType[opticalType];
   const quickSpecs = getQuickSpecs(item);
   const glassDescriptor = item.type === "glass" ? getGlassDescriptor(item) : "";
+  const spacerInsertSummary = item.type === "spacer" ? getSpacerInsertSummary(item) : undefined;
 
   return (
     <div
@@ -184,6 +216,12 @@ export function StackItemCard({
       </div>
       {glassDescriptor && <p className="mb-2 text-xs text-labMuted">{glassDescriptor}</p>}
       {quickSpecs && <p className="mono mb-2 text-[11px] text-labMuted">{quickSpecs}</p>}
+      {spacerInsertSummary?.insertLine && (
+        <p className="mono text-[11px] text-labMuted">{spacerInsertSummary.insertLine}</p>
+      )}
+      {spacerInsertSummary?.printLine && (
+        <p className="mono mb-2 text-[11px] text-labMuted">{spacerInsertSummary.printLine}</p>
+      )}
       <div className="grid grid-cols-4 gap-1">
         <Button variant="ghost" onClick={onMoveUp} className="px-2 py-1 text-[11px]">
           Up

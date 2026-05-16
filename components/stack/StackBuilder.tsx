@@ -850,6 +850,10 @@ export function StackBuilder({
     [project.mechanicalParts]
   );
   const [selectedId, setSelectedId] = useState<string | undefined>(orderedItems[0]?.id);
+  const [draftInsertedItemsBySpacer, setDraftInsertedItemsBySpacer] = useState<
+    Record<string, AirspaceInsertedItem[]>
+  >({});
+  const [insertApplyStatusBySpacer, setInsertApplyStatusBySpacer] = useState<Record<string, string>>({});
 
   const selectedItem = orderedItems.find((item) => item.id === selectedId) ?? orderedItems[0];
   const selectedErrors = selectedItem ? validateItem(selectedItem) : [];
@@ -880,16 +884,25 @@ export function StackBuilder({
     : -1;
   const selectedSpacerNearbyApertureMm =
     selectedSpacerIndex >= 0 ? getNearbyAperture(orderedItems, selectedSpacerIndex) : 0;
+  const selectedSpacerWorkingInsertedItems = selectedSpacer
+    ? normalizeAirspaceInsertedItems(
+        draftInsertedItemsBySpacer[selectedSpacer.id] ?? selectedSpacer.insertedItems ?? []
+      )
+    : [];
   const selectedSpacerInsertedLayouts = selectedSpacer
     ? calculateAirspaceInsertLayouts(
         selectedSpacerDesiredOpticalAirGapMm,
-        selectedSpacer.insertedItems,
+        selectedSpacerWorkingInsertedItems,
         {
           targetStackOuterDiameterMm,
           nearbyClearApertureMm: selectedSpacerNearbyApertureMm
         }
       )
     : [];
+  const selectedSpacerInsertDraftDirty =
+    selectedSpacer !== undefined && draftInsertedItemsBySpacer[selectedSpacer.id] !== undefined;
+  const selectedSpacerInsertStatusText =
+    selectedSpacer !== undefined ? insertApplyStatusBySpacer[selectedSpacer.id] : undefined;
   const selectedSpacerInsertedWarnings = Array.from(
     new Set(
       selectedSpacerInsertedLayouts.flatMap((layout) =>
@@ -975,14 +988,47 @@ export function StackBuilder({
     spacerId: string,
     updater: (items: AirspaceInsertedItem[]) => AirspaceInsertedItem[]
   ) => {
-    updateTypedItem(spacerId, "spacer", (entry) => {
-      const nextItems = normalizeAirspaceInsertedItems(updater(entry.insertedItems ?? []));
-      return {
-        ...entry,
-        insertedItems: nextItems,
-        insertedItemsTotalThicknessMm: Number(getAirspaceInsertedItemsTotalThicknessMm(nextItems).toFixed(3))
-      };
+    const sourceSpacer = orderedItems.find(
+      (item): item is Extract<StackItem, { type: "spacer" }> => item.id === spacerId && item.type === "spacer"
+    );
+    const baseItems = normalizeAirspaceInsertedItems(
+      draftInsertedItemsBySpacer[spacerId] ?? sourceSpacer?.insertedItems ?? []
+    );
+    const nextItems = normalizeAirspaceInsertedItems(updater(baseItems));
+    setDraftInsertedItemsBySpacer((current) => ({
+      ...current,
+      [spacerId]: nextItems
+    }));
+    setInsertApplyStatusBySpacer((current) => ({
+      ...current,
+      [spacerId]: ""
+    }));
+  };
+
+  const applySpacerInsertedItems = (spacerId: string) => {
+    const sourceSpacer = orderedItems.find(
+      (item): item is Extract<StackItem, { type: "spacer" }> => item.id === spacerId && item.type === "spacer"
+    );
+    if (!sourceSpacer) return;
+
+    const nextItems = normalizeAirspaceInsertedItems(
+      draftInsertedItemsBySpacer[spacerId] ?? sourceSpacer.insertedItems ?? []
+    );
+    updateTypedItem(spacerId, "spacer", (entry) => ({
+      ...entry,
+      insertedItems: nextItems,
+      insertedItemsTotalThicknessMm: Number(getAirspaceInsertedItemsTotalThicknessMm(nextItems).toFixed(3))
+    }));
+    setDraftInsertedItemsBySpacer((current) => {
+      const next = { ...current };
+      delete next[spacerId];
+      return next;
     });
+    const desiredAirspaceMm = getSpacerDesiredOpticalAirGapMm(sourceSpacer);
+    setInsertApplyStatusBySpacer((current) => ({
+      ...current,
+      [spacerId]: `AirSpace inserts saved. Total airspace remains ${desiredAirspaceMm.toFixed(3)}mm.`
+    }));
   };
 
   const addInsertedItemToSpacer = (
@@ -2124,6 +2170,24 @@ export function StackBuilder({
                         Add Custom Insert
                       </Button>
                     </div>
+                    <div className="mt-3 space-y-1">
+                      <p className="text-xs text-labMuted">
+                        CAD/export will generate spacer-before + insert disk + spacer-after while keeping the original
+                        AirSpace as optical source of truth.
+                      </p>
+                      {selectedSpacerInsertDraftDirty ? (
+                        <p className="text-xs text-labWarning">
+                          Changes are staged locally. Click Apply AirSpace Inserts to save this AirSpace.
+                        </p>
+                      ) : (selectedItem.insertedItems?.length ?? 0) > 0 ? (
+                        <p className="text-xs text-labMuted">Inserted item is active inside this AirSpace.</p>
+                      ) : (
+                        <p className="text-xs text-labMuted">No inserted items active inside this AirSpace.</p>
+                      )}
+                      {selectedSpacerInsertStatusText && (
+                        <p className="text-xs text-labAccent">{selectedSpacerInsertStatusText}</p>
+                      )}
+                    </div>
 
                     {selectedSpacerInsertedLayouts.length === 0 && (
                       <p className="mt-3 text-xs text-labMuted">
@@ -2386,6 +2450,25 @@ export function StackBuilder({
                         })}
                       </div>
                     )}
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <Button
+                        type="button"
+                        className={`w-full ${selectedSpacerWorkingInsertedItems.length === 0 ? "sm:col-span-2" : ""}`}
+                        onClick={() => applySpacerInsertedItems(selectedItem.id)}
+                      >
+                        Apply AirSpace Inserts
+                      </Button>
+                      {selectedSpacerWorkingInsertedItems.length > 0 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="w-full"
+                          onClick={() => updateSpacerInsertedItems(selectedItem.id, () => [])}
+                        >
+                          Clear all inserts
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   <label className="flex items-center gap-2 text-sm text-labMuted">
                     <input

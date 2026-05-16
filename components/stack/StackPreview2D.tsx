@@ -37,6 +37,14 @@ function toPositive(value: number | undefined): number {
   return value;
 }
 
+function startCase(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function getOuterDiameterMm(item: StackItem): number {
   switch (item.type) {
     case "glass":
@@ -192,6 +200,10 @@ export function StackPreview2D({
 
           const showText = width > 56;
           const shortName = item.name.length > 18 ? `${item.name.slice(0, 18)}…` : item.name;
+          const spacerInsertMarker =
+            item.type === "spacer" && (item.insertedItems?.length ?? 0) > 0
+              ? `${startCase(item.insertedItems?.[0]?.type ?? "insert")} inside${(item.insertedItems?.length ?? 0) > 1 ? ` +${(item.insertedItems?.length ?? 0) - 1}` : ""}`
+              : undefined;
 
           return (
             <g key={item.id} onClick={() => onSelect(item.id)} className="cursor-pointer">
@@ -226,6 +238,11 @@ export function StackPreview2D({
                   <text x={x + width / 2} y={centerY + 10} fill="#9a9a9a" textAnchor="middle" fontSize="8.5">
                     {getItemOpticalTypeLabel(item)}
                   </text>
+                  {spacerInsertMarker && (
+                    <text x={x + width / 2} y={centerY + 22} fill="#f5a437" textAnchor="middle" fontSize="8">
+                      {spacerInsertMarker}
+                    </text>
+                  )}
                 </>
               )}
             </g>
