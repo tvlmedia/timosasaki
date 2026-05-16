@@ -19,7 +19,7 @@ import { safeFileName } from "@/lib/ids";
 import { generateScad, type ScadPayload } from "@/lib/scad";
 import { generateFixedPlBarrelWithSlotsPushPullV4Scad } from "@/lib/scad/fixedPlBarrelWithSlots";
 import { downloadTextFile } from "@/lib/storage";
-import type { ElementCupParams, LensProject, StackItem } from "@/types";
+import type { CadDefaults, ElementCupParams, LensProject, StackItem } from "@/types";
 
 const DEFAULT_PL_STEP_RELATIVE_PATH = "cad/reference/PL_Lens_Tail.STEP";
 const DEFAULT_PL_STL_RELATIVE_PATH = "cad/reference/PL_Lens_Tail.stl";
@@ -35,7 +35,7 @@ const needsSource: Record<CadPartType, StackItem["type"] | null> = {
   diffusion_holder: "diffusion",
   retaining_ring: "retaining_ring",
   fixed_pl_barrel_with_slots: null,
-  sliding_optical_carrier: null,
+  sliding_optical_carrier: "glass",
   main_barrel: "barrel",
   moving_carrier: "barrel",
   cam_sleeve: "barrel"
@@ -64,6 +64,13 @@ type FocusTravelLike = {
   targetMountThroatDiameterMm?: number;
   recommendedPrototypeTravelMm?: number;
   prototypeStartMm?: number;
+};
+
+type SlidingCarrierLengthSource = "manual" | "lens_cup_or_stack";
+
+type SlidingCarrierOverrides = {
+  lengthSource: SlidingCarrierLengthSource;
+  manualLengthMm: number;
 };
 
 function toFiniteOrUndefined(value: number | undefined): number | undefined {
@@ -195,6 +202,82 @@ function normalizeAdvancedProfileForCup(
   };
 }
 
+function getGlassProfileLengthMm(glass?: Extract<StackItem, { type: "glass" }>): number | undefined {
+  if (!glass) return undefined;
+
+  if (glass.advancedProfile?.enabled) {
+    const advancedSectionsLength = (glass.advancedProfile.sections ?? []).reduce(
+      (sum, section) => sum + toPositive(section.lengthMm),
+      0
+    );
+    if (advancedSectionsLength > 0) {
+      return advancedSectionsLength;
+    }
+    if (toPositive(glass.advancedProfile.totalLengthMm) > 0) {
+      return glass.advancedProfile.totalLengthMm;
+    }
+  }
+
+  if (glass.advancedProfileEnabled) {
+    const profileDepth = (glass.profileSegments ?? []).reduce(
+      (sum, segment) => sum + toPositive(segment.depthMm),
+      0
+    );
+    if (profileDepth > 0) {
+      return profileDepth;
+    }
+  }
+
+  const thickness = toPositive(glass.thicknessMm);
+  return thickness > 0 ? thickness : undefined;
+}
+
+function isAdvancedSteppedCup(glass?: Extract<StackItem, { type: "glass" }>): boolean {
+  if (!glass) return false;
+  if (glass.advancedProfile?.enabled) return true;
+  return Boolean(glass.advancedProfileEnabled && (glass.profileSegments?.length ?? 0) > 0);
+}
+
+function getElementCupRearLipDefaultMm(glass: Extract<StackItem, { type: "glass" }> | undefined, defaults: CadDefaults): number {
+  return isAdvancedSteppedCup(glass) ? Math.max(defaults.retainingLipMm, 1.2) : defaults.retainingLipMm;
+}
+
+function estimateLensCupDepthMm(
+  glass: Extract<StackItem, { type: "glass" }> | undefined,
+  defaults: CadDefaults
+): number | undefined {
+  const profileLengthMm = getGlassProfileLengthMm(glass);
+  if (!profileLengthMm || profileLengthMm <= 0) return undefined;
+  const rearLipMm = getElementCupRearLipDefaultMm(glass, defaults);
+  return profileLengthMm + rearLipMm + 0.5;
+}
+
+function resolveSlidingCarrierLengthMm({
+  project,
+  sourceGlass,
+  defaults,
+  focusTravelMm,
+  lengthSource,
+  manualLengthMm
+}: {
+  project: LensProject;
+  sourceGlass: Extract<StackItem, { type: "glass" }> | undefined;
+  defaults: CadDefaults;
+  focusTravelMm: number;
+  lengthSource: SlidingCarrierLengthSource;
+  manualLengthMm: number;
+}): number {
+  if (lengthSource === "manual") {
+    const manual = Number.isFinite(manualLengthMm) ? manualLengthMm : 0;
+    return Number(Math.max(8, manual).toFixed(3));
+  }
+
+  const cupDepthMm = estimateLensCupDepthMm(sourceGlass, defaults);
+  const stackLengthMm = getTotalStackLength(project.stackItems);
+  const baseLengthMm = cupDepthMm ?? (stackLengthMm > 0 ? stackLengthMm : undefined) ?? focusTravelMm;
+  return Number(Math.max(18, Math.min(baseLengthMm + 3.0, 120)).toFixed(3));
+}
+
 function getAdvancedProfileSectionSum(profile: ElementCupParams["advancedProfile"] | undefined): number {
   if (!profile?.sections?.length) return 0;
   return profile.sections.reduce((sum, section) => sum + toPositive(section.lengthMm), 0);
@@ -248,7 +331,8 @@ function createPayload(
   project: LensProject,
   partType: CadPartType,
   source?: StackItem,
-  fixedPlOverrides?: { barrelAttachZMm: number; plOverlapMm: number }
+  fixedPlOverrides?: { barrelAttachZMm: number; plOverlapMm: number },
+  slidingCarrierOverrides?: SlidingCarrierOverrides
 ): ScadPayload {
   const defaults = project.cadDefaults;
   const sourceName = source?.name ?? "part";
@@ -277,6 +361,7 @@ function createPayload(
   switch (partType) {
     case "element_cup": {
       const glass = source?.type === "glass" ? source : undefined;
+      const rearLipMm = getElementCupRearLipDefaultMm(glass, defaults);
       const advancedProfile = normalizeAdvancedProfileForCup(glass);
       const steppedLargeDiameterMm = toPositive(glass?.largeDiameterMm);
       const steppedSmallDiameterMm = toPositive(glass?.smallDiameterMm);
@@ -348,7 +433,7 @@ function createPayload(
           wallThicknessMm: Number(resolvedWallThickness.toFixed(3)),
           outerDiameterMm: Number(resolvedOuterDiameter.toFixed(3)),
           retainingLipMm: defaults.retainingLipMm,
-          rearLipMm: defaults.retainingLipMm,
+          rearLipMm: Number(rearLipMm.toFixed(3)),
           facets: defaults.facets
         }
       };
@@ -537,6 +622,7 @@ function createPayload(
       };
     }
     case "sliding_optical_carrier": {
+      const glass = source?.type === "glass" ? source : undefined;
       const largestGlassDiameter = getLargestGlassDiameter(project.stackItems);
       const fixedInner = Math.max(
         plMainBarrelInnerDefault,
@@ -557,7 +643,14 @@ function createPayload(
       );
       const focusTravelMm =
         focusDerived.recommendedPrototypeTravelMm ?? plSlotLengthManual;
-      const carrierLength = Number(Math.max(18, Math.min(focusTravelMm * 0.72, 52)).toFixed(3));
+      const carrierLength = resolveSlidingCarrierLengthMm({
+        project,
+        sourceGlass: glass,
+        defaults,
+        focusTravelMm,
+        lengthSource: slidingCarrierOverrides?.lengthSource ?? "lens_cup_or_stack",
+        manualLengthMm: slidingCarrierOverrides?.manualLengthMm ?? 48
+      });
       const pinHoleDiameter = Number((plPinDiameter + plPinClearance).toFixed(3));
       const pinBossDiameter = Number((pinHoleDiameter + 3).toFixed(3));
       const pinHoleZ = Number((carrierLength * 0.5).toFixed(3));
@@ -647,6 +740,9 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const [partType, setPartType] = useState<CadPartType>("element_cup");
   const [sourceItemId, setSourceItemId] = useState<string | undefined>();
   const [exportMode, setExportMode] = useState<"openscad" | "freecad_macro">("openscad");
+  const [slidingCarrierLengthSource, setSlidingCarrierLengthSource] =
+    useState<SlidingCarrierLengthSource>("lens_cup_or_stack");
+  const [slidingCarrierManualLengthMm, setSlidingCarrierManualLengthMm] = useState<number>(48.0);
   const [fixedPlBarrelAttachZMm, setFixedPlBarrelAttachZMm] = useState<number>(
     project.cadDefaults.plBarrelAttachZMm ?? 0.0
   );
@@ -686,11 +782,23 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
           plOverlapMm: fixedPlOverlapMm
         }
       : undefined;
-  const payload = createPayload(project, partType, sourceItem, fixedPlOverrides);
+  const slidingCarrierOverrides: SlidingCarrierOverrides = {
+    lengthSource: slidingCarrierLengthSource,
+    manualLengthMm: slidingCarrierManualLengthMm
+  };
+  const payload = createPayload(
+    project,
+    partType,
+    sourceItem,
+    fixedPlOverrides,
+    slidingCarrierOverrides
+  );
   const slidingCarrierPayloadForAssembly = createPayload(
     project,
     "sliding_optical_carrier",
-    sourceItem
+    sourceItem,
+    undefined,
+    slidingCarrierOverrides
   );
   const slidingCarrierParamsForAssembly =
     slidingCarrierPayloadForAssembly.type === "sliding_optical_carrier"
@@ -783,6 +891,30 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     }
     return warnings;
   })();
+  const elementCupValidationWarnings = (() => {
+    if (payload.type !== "element_cup" || !payload.params.advancedProfile?.enabled) return [] as string[];
+    const warnings: string[] = [];
+    const advanced = payload.params.advancedProfile;
+    const sortedSections = (advanced.sections ?? [])
+      .slice()
+      .sort((a, b) => a.index - b.index)
+      .filter((section) => section.diameterMm > 0 && section.lengthMm > 0);
+    if (!sortedSections.length) return warnings;
+    const lastMeasuredDiameter = sortedSections[sortedSections.length - 1]?.diameterMm ?? advanced.maxDiameterMm;
+    const defaultRearClearHole = Math.max(lastMeasuredDiameter - 2.0, 0.4);
+    const requestedRearClearHole = Math.max(advanced.rearClearHoleMm ?? defaultRearClearHole, 0.4);
+    const insertionSafeBoreSections = buildInsertionSafeBoreSections(advanced, payload.params.seatClearanceMm);
+    const lastBoreDiameter =
+      insertionSafeBoreSections[insertionSafeBoreSections.length - 1]?.diameterMm ??
+      advanced.maxDiameterMm + payload.params.seatClearanceMm;
+    if (requestedRearClearHole >= lastBoreDiameter) {
+      warnings.push("Rear clear hole is too large; no retaining lip remains.");
+    }
+    if (payload.params.rearLipMm < 0.8) {
+      warnings.push("Rear retaining lip may be too thin.");
+    }
+    return warnings;
+  })();
   const exportModeWarnings = [
     ...(exportMode === "freecad_macro" && !freecadPayload
       ? [
@@ -802,6 +934,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   ];
   const partWarnings = [
     ...(sourceItem ? getPartWarnings(sourceItem, project.cadDefaults) : []),
+    ...elementCupValidationWarnings,
     ...slidingCarrierValidationWarnings
   ];
 
@@ -1026,6 +1159,42 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
           <p className="text-sm text-labMuted">
             Use barrel_attach_z to move the generated barrel toward/away from the imported PL STL. Use pl_overlap to
             make sure the generated barrel physically overlaps the PL reference and does not float.
+          </p>
+        </div>
+      )}
+
+      {partType === "sliding_optical_carrier" && (
+        <div className="panel space-y-3 p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">
+            Sliding Carrier Controls
+          </h3>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Select
+              label="Carrier length source"
+              value={slidingCarrierLengthSource}
+              onChange={(event) =>
+                setSlidingCarrierLengthSource(event.target.value as SlidingCarrierLengthSource)
+              }
+            >
+              <option value="manual">manual</option>
+              <option value="lens_cup_or_stack">from selected lens cup / optical stack length</option>
+            </Select>
+            <NumberInput
+              label="Carrier length manual (mm)"
+              value={slidingCarrierManualLengthMm}
+              min={8}
+              step={0.1}
+              onChange={(event) =>
+                setSlidingCarrierManualLengthMm(
+                  Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : 48
+                )
+              }
+              disabled={slidingCarrierLengthSource !== "manual"}
+            />
+          </div>
+          <p className="text-sm text-labMuted">
+            In automatic mode, carrier length defaults to cup depth + 3.0mm when a lens cup source is available,
+            otherwise it falls back to optical stack length + 3.0mm.
           </p>
         </div>
       )}
