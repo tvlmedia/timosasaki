@@ -82,6 +82,9 @@ type CascadeSizing = {
   sourceGlassMaxDiameterMm: number;
   cupDepthMm?: number;
   cupOuterDiameterMm?: number;
+  cupToCarrierClearanceMm: number;
+  targetStackOuterDiameterMm: number;
+  targetStackOuterDiameterSource: "manual" | "carrier_inner" | "fixed_barrel_inner" | "largest_glass_fallback";
   carrierLengthMm: number;
   carrierLengthSource: CarrierLengthDerivedSource;
   carrierInnerDiameterMm: number;
@@ -102,7 +105,9 @@ const MIN_CARRIER_LENGTH_MM = 18.0;
 const MAX_CARRIER_LENGTH_MM = 120.0;
 const MIN_CARRIER_FIT_CLEARANCE_DIAMETER_MM = 0.6;
 const DEFAULT_SLIDING_CLEARANCE_DIAMETER_MM = 0.8;
+const DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM = 0.6;
 const DEFAULT_BARREL_END_MARGIN_MM = 8.0;
+const MIN_CUP_WALL_THICKNESS_MM = 1.2;
 
 function toFiniteOrUndefined(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -364,7 +369,7 @@ function deriveCascadeSizing({
     measuredSourceGlassMaxDiameter > 0 ? measuredSourceGlassMaxDiameter : fallbackLargestGlassDiameter;
 
   const cupDepthMm = estimateLensCupDepthMm(sourceGlass, defaults);
-  const cupOuterDiameterMm =
+  const localCupOuterDiameterMm =
     sourceGlassMaxDiameterMm > 0
       ? Number((sourceGlassMaxDiameterMm + defaults.wallThicknessMm * 2).toFixed(3))
       : undefined;
@@ -380,9 +385,11 @@ function deriveCascadeSizing({
   });
 
   const carrierInnerBaseSource: CarrierInnerBaseSource =
-    cupOuterDiameterMm && cupOuterDiameterMm > 0 ? "cup_outer_diameter" : "largest_glass_diameter";
+    localCupOuterDiameterMm && localCupOuterDiameterMm > 0 ? "cup_outer_diameter" : "largest_glass_diameter";
   const carrierInnerBaseDiameter =
-    carrierInnerBaseSource === "cup_outer_diameter" ? (cupOuterDiameterMm as number) : sourceGlassMaxDiameterMm;
+    carrierInnerBaseSource === "cup_outer_diameter"
+      ? (localCupOuterDiameterMm as number)
+      : sourceGlassMaxDiameterMm;
   const carrierFitClearanceMm = Math.max(
     MIN_CARRIER_FIT_CLEARANCE_DIAMETER_MM,
     (defaults.radialClearanceMm + defaults.printToleranceMm) * 2
@@ -394,6 +401,34 @@ function deriveCascadeSizing({
 
   const slidingClearanceMm = DEFAULT_SLIDING_CLEARANCE_DIAMETER_MM;
   const fixedBarrelInnerDiameterMm = Number((carrierOuterDiameterMm + slidingClearanceMm).toFixed(3));
+  const cupToCarrierClearanceMm = Math.max(0, defaults.cupToCarrierClearanceMm ?? DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM);
+  const manualTargetStackOuterDiameterMm = toPositive(defaults.targetStackOuterDiameterMm);
+  const fixedBarrelInnerCandidateMm = Math.max(
+    fixedBarrelInnerDiameterMm,
+    toPositive(defaults.plMainBarrelInnerDiameterMm)
+  );
+  const computedTargetStackFromCarrierMm = carrierInnerDiameterMm - cupToCarrierClearanceMm;
+  const computedTargetStackFromFixedBarrelMm =
+    fixedBarrelInnerCandidateMm - slidingClearanceMm - cupToCarrierClearanceMm;
+  const fallbackTargetStackOuterDiameterMm = sourceGlassMaxDiameterMm > 0 ? sourceGlassMaxDiameterMm + 6.0 : 0;
+
+  let targetStackOuterDiameterSource: CascadeSizing["targetStackOuterDiameterSource"];
+  let targetStackOuterDiameterMmRaw = 0;
+  if (manualTargetStackOuterDiameterMm > 0) {
+    targetStackOuterDiameterSource = "manual";
+    targetStackOuterDiameterMmRaw = manualTargetStackOuterDiameterMm;
+  } else if (computedTargetStackFromCarrierMm > 0) {
+    targetStackOuterDiameterSource = "carrier_inner";
+    targetStackOuterDiameterMmRaw = computedTargetStackFromCarrierMm;
+  } else if (computedTargetStackFromFixedBarrelMm > 0) {
+    targetStackOuterDiameterSource = "fixed_barrel_inner";
+    targetStackOuterDiameterMmRaw = computedTargetStackFromFixedBarrelMm;
+  } else {
+    targetStackOuterDiameterSource = "largest_glass_fallback";
+    targetStackOuterDiameterMmRaw = fallbackTargetStackOuterDiameterMm;
+  }
+  const targetStackOuterDiameterMm = Number(Math.max(4, targetStackOuterDiameterMmRaw).toFixed(3));
+  const cupOuterDiameterMm = targetStackOuterDiameterMm;
 
   const slotLengthSource: SlotLengthSource =
     focusDerived.recommendedPrototypeTravelMm && focusDerived.recommendedPrototypeTravelMm > 0
@@ -416,6 +451,9 @@ function deriveCascadeSizing({
     sourceGlassMaxDiameterMm,
     cupDepthMm,
     cupOuterDiameterMm,
+    cupToCarrierClearanceMm,
+    targetStackOuterDiameterMm,
+    targetStackOuterDiameterSource,
     carrierLengthMm: carrierLengthResolved.lengthMm,
     carrierLengthSource: carrierLengthResolved.source,
     carrierInnerDiameterMm,
@@ -587,12 +625,22 @@ function createPayload(
     case "spacer_ring": {
       const spacer = source?.type === "spacer" ? source : undefined;
       const spacerPartName = `spacer_air_gap_${safeFileName(sourceName || "ring")}`;
+      const sourceClearApertureMm = toPositive(cascade.sourceGlass?.clearApertureMm);
+      const defaultSpacerInnerDiameterMm = sourceClearApertureMm > 0 ? sourceClearApertureMm + 2.0 : 30.0;
+      const resolvedSpacerInnerDiameterMm =
+        toPositive(spacer?.innerDiameterMm) > 0 ? (spacer?.innerDiameterMm as number) : defaultSpacerInnerDiameterMm;
+      const resolvedSpacerOuterDiameterMm =
+        cascade.targetStackOuterDiameterMm > 0
+          ? cascade.targetStackOuterDiameterMm
+          : toPositive(spacer?.outerDiameterMm) > 0
+            ? (spacer?.outerDiameterMm as number)
+            : defaults.defaultOuterDiameterMm;
       return {
         type: "spacer_ring",
         params: {
           partName: spacerPartName,
-          innerDiameterMm: spacer?.innerDiameterMm ?? defaults.defaultInnerDiameterMm,
-          outerDiameterMm: spacer?.outerDiameterMm ?? defaults.defaultOuterDiameterMm,
+          innerDiameterMm: Number(resolvedSpacerInnerDiameterMm.toFixed(3)),
+          outerDiameterMm: Number(resolvedSpacerOuterDiameterMm.toFixed(3)),
           thicknessMm: spacer?.thicknessMm ?? defaults.partThicknessMm,
           hasAntiReflectionGrooves: Boolean(spacer?.hasAntiReflectionGrooves),
           chamferEnabled: Boolean(spacer?.chamferEnabled),
@@ -1097,26 +1145,34 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     return warnings;
   })();
   const elementCupValidationWarnings = (() => {
-    if (payload.type !== "element_cup" || !payload.params.advancedProfile?.enabled) return [] as string[];
+    if (payload.type !== "element_cup") return [] as string[];
     const warnings: string[] = [];
-    const advanced = payload.params.advancedProfile;
-    const sortedSections = (advanced.sections ?? [])
-      .slice()
-      .sort((a, b) => a.index - b.index)
-      .filter((section) => section.diameterMm > 0 && section.lengthMm > 0);
-    if (!sortedSections.length) return warnings;
-    const lastMeasuredDiameter = sortedSections[sortedSections.length - 1]?.diameterMm ?? advanced.maxDiameterMm;
-    const defaultRearClearHole = Math.max(lastMeasuredDiameter - 2.0, 0.4);
-    const requestedRearClearHole = Math.max(advanced.rearClearHoleMm ?? defaultRearClearHole, 0.4);
-    const insertionSafeBoreSections = buildInsertionSafeBoreSections(advanced, payload.params.seatClearanceMm);
-    const lastBoreDiameter =
-      insertionSafeBoreSections[insertionSafeBoreSections.length - 1]?.diameterMm ??
-      advanced.maxDiameterMm + payload.params.seatClearanceMm;
-    if (requestedRearClearHole >= lastBoreDiameter) {
-      warnings.push("Rear clear hole is too large; no retaining lip remains.");
+    const targetStackOuterDiameterMm = toPositive(cascadeSizing.targetStackOuterDiameterMm);
+    const minimumCupOuterDiameterMm = payload.params.glassDiameterMm + MIN_CUP_WALL_THICKNESS_MM * 2;
+    if (targetStackOuterDiameterMm > 0 && targetStackOuterDiameterMm <= minimumCupOuterDiameterMm) {
+      warnings.push("Target stack OD is too small for this glass/cup wall thickness.");
     }
-    if (payload.params.rearLipMm < 0.8) {
-      warnings.push("Rear retaining lip may be too thin.");
+
+    if (payload.params.advancedProfile?.enabled) {
+      const advanced = payload.params.advancedProfile;
+      const sortedSections = (advanced.sections ?? [])
+        .slice()
+        .sort((a, b) => a.index - b.index)
+        .filter((section) => section.diameterMm > 0 && section.lengthMm > 0);
+      if (!sortedSections.length) return warnings;
+      const lastMeasuredDiameter = sortedSections[sortedSections.length - 1]?.diameterMm ?? advanced.maxDiameterMm;
+      const defaultRearClearHole = Math.max(lastMeasuredDiameter - 2.0, 0.4);
+      const requestedRearClearHole = Math.max(advanced.rearClearHoleMm ?? defaultRearClearHole, 0.4);
+      const insertionSafeBoreSections = buildInsertionSafeBoreSections(advanced, payload.params.seatClearanceMm);
+      const lastBoreDiameter =
+        insertionSafeBoreSections[insertionSafeBoreSections.length - 1]?.diameterMm ??
+        advanced.maxDiameterMm + payload.params.seatClearanceMm;
+      if (requestedRearClearHole >= lastBoreDiameter) {
+        warnings.push("Rear clear hole is too large; no retaining lip remains.");
+      }
+      if (payload.params.rearLipMm < 0.8) {
+        warnings.push("Rear retaining lip may be too thin.");
+      }
     }
     return warnings;
   })();
@@ -1151,6 +1207,13 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     };
 
     if (payload.type === "element_cup") {
+      values.largest_glass_diameter = `${pretty(cascadeSizing.sourceGlassMaxDiameterMm)} mm`;
+      values.carrier_inner_diameter = `${pretty(cascadeSizing.carrierInnerDiameterMm)} mm`;
+      values.cup_to_carrier_clearance = `${pretty(cascadeSizing.cupToCarrierClearanceMm)} mm`;
+      values.target_stack_outer_diameter = `${pretty(cascadeSizing.targetStackOuterDiameterMm)} mm`;
+      values.target_stack_outer_diameter_source = cascadeSizing.targetStackOuterDiameterSource;
+      values.lens_cup_outer_diameter = `${pretty(payload.params.outerDiameterMm ?? 0)} mm`;
+      values.spacer_outer_diameter = `${pretty(cascadeSizing.targetStackOuterDiameterMm)} mm`;
       values.source_glass_max_diameter = `${pretty(cascadeSizing.sourceGlassMaxDiameterMm)} mm`;
       values.glass_diameter = `${pretty(payload.params.glassDiameterMm)} mm`;
       values.glass_thickness = `${pretty(payload.params.glassThicknessMm)} mm`;
@@ -1186,6 +1249,13 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     }
 
     if (payload.type === "spacer_ring") {
+      values.largest_glass_diameter = `${pretty(cascadeSizing.sourceGlassMaxDiameterMm)} mm`;
+      values.carrier_inner_diameter = `${pretty(cascadeSizing.carrierInnerDiameterMm)} mm`;
+      values.cup_to_carrier_clearance = `${pretty(cascadeSizing.cupToCarrierClearanceMm)} mm`;
+      values.target_stack_outer_diameter = `${pretty(cascadeSizing.targetStackOuterDiameterMm)} mm`;
+      values.target_stack_outer_diameter_source = cascadeSizing.targetStackOuterDiameterSource;
+      values.lens_cup_outer_diameter = `${pretty(cascadeSizing.cupOuterDiameterMm ?? cascadeSizing.targetStackOuterDiameterMm)} mm`;
+      values.spacer_outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
       values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
       values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
       values.thickness = `${pretty(payload.params.thicknessMm)} mm`;

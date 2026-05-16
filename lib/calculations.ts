@@ -65,16 +65,35 @@ function getGlassMaxDiameterForCup(item?: StackItem): number {
   return Math.max(0, ...candidates);
 }
 
+function getTargetStackOuterDiameterForWarnings(items: StackItem[], defaults: CadDefaults): number {
+  const manualTarget = toPositive(defaults.targetStackOuterDiameterMm);
+  if (manualTarget > 0) return manualTarget;
+
+  const cupToCarrierClearance = Math.max(0, toPositive(defaults.cupToCarrierClearanceMm) || 0.6);
+  const fixedBarrelInner = toPositive(defaults.plMainBarrelInnerDiameterMm);
+  if (fixedBarrelInner > 0) {
+    return Math.max(4, fixedBarrelInner - 0.8 - cupToCarrierClearance);
+  }
+
+  const largestGlass = getLargestGlassDiameter(items);
+  if (largestGlass > 0) {
+    return largestGlass + 6.0;
+  }
+  return 0;
+}
+
 function getNearestLensCupOuterDiameterOnSide(
   items: StackItem[],
   fromIndex: number,
   direction: -1 | 1,
   defaults: CadDefaults
 ): number {
+  const targetStackOuterDiameter = getTargetStackOuterDiameterForWarnings(items, defaults);
   let index = fromIndex + direction;
   while (index >= 0 && index < items.length) {
     const cupSourceDiameter = getGlassMaxDiameterForCup(items[index]);
     if (cupSourceDiameter > 0) {
+      if (targetStackOuterDiameter > 0) return targetStackOuterDiameter;
       return cupSourceDiameter + defaults.wallThicknessMm * 2;
     }
     index += direction;

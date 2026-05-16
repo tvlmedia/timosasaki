@@ -40,6 +40,10 @@ const spacerDiameterModeOptions: Array<{ value: SpacerDiameterMode; label: strin
   { value: "manual", label: "Manual" }
 ];
 
+const DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM = 0.6;
+const DEFAULT_SLIDING_CLEARANCE_DIAMETER_MM = 0.8;
+const TARGET_STACK_FALLBACK_MARGIN_MM = 6.0;
+
 function normalizePositions(items: StackItem[]): StackItem[] {
   return items.map((item, index) => ({ ...item, positionIndex: index }));
 }
@@ -433,6 +437,64 @@ function getReferenceBarrelInnerDiameter(
   return getRecommendedBarrelInnerDiameter(items, defaults);
 }
 
+function getMechanicalPartInnerDiameter(
+  mechanicalParts: MechanicalPart[],
+  partType: MechanicalPart["type"]
+): number {
+  const part = mechanicalParts.find((entry) => entry.type === partType && toPositive(entry.innerDiameterMm) > 0);
+  return part ? toPositive(part.innerDiameterMm) : 0;
+}
+
+function getCarrierInnerDiameterCandidate(mechanicalParts: MechanicalPart[]): number {
+  return getMechanicalPartInnerDiameter(mechanicalParts, "sliding_optical_carrier");
+}
+
+function getFixedBarrelInnerDiameterCandidate(
+  mechanicalParts: MechanicalPart[],
+  defaults: CadDefaults
+): number {
+  const priority: MechanicalPart["type"][] = ["fixed_pl_barrel", "main_barrel", "barrel"];
+  for (const type of priority) {
+    const inner = getMechanicalPartInnerDiameter(mechanicalParts, type);
+    if (inner > 0) return inner;
+  }
+  return toPositive(defaults.plMainBarrelInnerDiameterMm);
+}
+
+function getLargestGlassMaxDiameter(items: StackItem[]): number {
+  return items.reduce((max, item) => Math.max(max, getGlassMaxDiameterForCup(item)), 0);
+}
+
+function getTargetStackOuterDiameter(
+  items: StackItem[],
+  mechanicalParts: MechanicalPart[],
+  defaults: CadDefaults
+): number {
+  const manual = toPositive(defaults.targetStackOuterDiameterMm);
+  if (manual > 0) return manual;
+
+  const cupToCarrierClearance = Math.max(
+    0,
+    toPositive(defaults.cupToCarrierClearanceMm) || DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM
+  );
+  const carrierInner = getCarrierInnerDiameterCandidate(mechanicalParts);
+  if (carrierInner > 0) {
+    return Math.max(4, carrierInner - cupToCarrierClearance);
+  }
+
+  const fixedBarrelInner = getFixedBarrelInnerDiameterCandidate(mechanicalParts, defaults);
+  if (fixedBarrelInner > 0) {
+    return Math.max(4, fixedBarrelInner - DEFAULT_SLIDING_CLEARANCE_DIAMETER_MM - cupToCarrierClearance);
+  }
+
+  const largestGlass = getLargestGlassMaxDiameter(items);
+  if (largestGlass > 0) {
+    return Math.max(4, largestGlass + TARGET_STACK_FALLBACK_MARGIN_MM);
+  }
+
+  return Math.max(4, toPositive(defaults.defaultOuterDiameterMm) - cupToCarrierClearance);
+}
+
 function getSpacerDiameterMode(item: Extract<StackItem, { type: "spacer" }>): SpacerDiameterMode {
   if (
     item.spacerDiameterMode === "match_lens_cups" ||
@@ -470,22 +532,31 @@ function getNearestLensCupOuterDiameterOnSide(
   items: StackItem[],
   fromIndex: number,
   direction: -1 | 1,
-  defaults: CadDefaults
+  defaults: CadDefaults,
+  targetStackOuterDiameterMm: number
 ): number {
   let index = fromIndex + direction;
   while (index >= 0 && index < items.length) {
     const candidate = getGlassMaxDiameterForCup(items[index]);
     if (candidate > 0) {
-      return Number((candidate + defaults.wallThicknessMm * 2).toFixed(2));
+      const cupOuter = targetStackOuterDiameterMm > 0
+        ? targetStackOuterDiameterMm
+        : candidate + defaults.wallThicknessMm * 2;
+      return Number(cupOuter.toFixed(2));
     }
     index += direction;
   }
   return 0;
 }
 
-function getAdjacentLensCupOuterDiameter(items: StackItem[], index: number, defaults: CadDefaults): number {
-  const left = getNearestLensCupOuterDiameterOnSide(items, index, -1, defaults);
-  const right = getNearestLensCupOuterDiameterOnSide(items, index, 1, defaults);
+function getAdjacentLensCupOuterDiameter(
+  items: StackItem[],
+  index: number,
+  defaults: CadDefaults,
+  targetStackOuterDiameterMm: number
+): number {
+  const left = getNearestLensCupOuterDiameterOnSide(items, index, -1, defaults, targetStackOuterDiameterMm);
+  const right = getNearestLensCupOuterDiameterOnSide(items, index, 1, defaults, targetStackOuterDiameterMm);
   return Math.max(left, right);
 }
 
@@ -494,11 +565,17 @@ function getSpacerCarrierOuterDiameterTarget(
   mechanicalParts: MechanicalPart[],
   defaults: CadDefaults
 ): number {
-  const fitClearancePerSide = Math.max(defaults.radialClearanceMm + defaults.printToleranceMm, 0.25);
-  const referenceCarrierInner = getReferenceBarrelInnerDiameter(items, mechanicalParts, defaults);
-  const fallbackCarrierInner = getRecommendedBarrelInnerDiameter(items, defaults);
-  const carrierInnerDiameter = Math.max(referenceCarrierInner, fallbackCarrierInner);
-  return Math.max(12, carrierInnerDiameter - fitClearancePerSide * 2);
+  const cupToCarrierClearance = Math.max(
+    0,
+    toPositive(defaults.cupToCarrierClearanceMm) || DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM
+  );
+  const carrierInnerDiameter =
+    getCarrierInnerDiameterCandidate(mechanicalParts) ||
+    getFixedBarrelInnerDiameterCandidate(mechanicalParts, defaults) - DEFAULT_SLIDING_CLEARANCE_DIAMETER_MM;
+  if (carrierInnerDiameter > 0) {
+    return Math.max(12, carrierInnerDiameter - cupToCarrierClearance);
+  }
+  return getTargetStackOuterDiameter(items, mechanicalParts, defaults);
 }
 
 function deriveSpacerRingDimensions(
@@ -512,7 +589,13 @@ function deriveSpacerRingDimensions(
   outerDiameterMm: number;
 } {
   const mode = getSpacerDiameterMode(spacer);
-  const adjacentCupOuterDiameter = getAdjacentLensCupOuterDiameter(items, index, defaults);
+  const targetStackOuterDiameterMm = getTargetStackOuterDiameter(items, mechanicalParts, defaults);
+  const adjacentCupOuterDiameter = getAdjacentLensCupOuterDiameter(
+    items,
+    index,
+    defaults,
+    targetStackOuterDiameterMm
+  );
   const carrierBasedOuterDiameter = getSpacerCarrierOuterDiameterTarget(items, mechanicalParts, defaults);
   const nearbyAperture = getNearbyAperture(items, index);
   const defaultInnerFromAperture = nearbyAperture > 0 ? nearbyAperture + 2.0 : 30.0;
@@ -527,7 +610,9 @@ function deriveSpacerRingDimensions(
         ? carrierBasedOuterDiameter
         : adjacentCupOuterDiameter > 0
           ? adjacentCupOuterDiameter
-          : carrierBasedOuterDiameter;
+          : targetStackOuterDiameterMm > 0
+            ? targetStackOuterDiameterMm
+            : carrierBasedOuterDiameter;
   const outerDiameterMm = Math.max(10, outerCandidate > 0 ? outerCandidate : carrierBasedOuterDiameter);
 
   const innerCandidate = mode === "manual" ? manualInner : defaultInnerFromAperture;
@@ -748,6 +833,14 @@ export function StackBuilder({
 
   const commitMechanicalParts = (nextMechanicalParts: MechanicalPart[]) => {
     commitProjectState(orderedItems, nextMechanicalParts);
+  };
+
+  const updateCadDefaults = (updater: (defaults: CadDefaults) => CadDefaults) => {
+    onProjectChange({
+      ...project,
+      updatedAt: new Date().toISOString(),
+      cadDefaults: updater(project.cadDefaults)
+    });
   };
 
   useEffect(() => {
@@ -982,6 +1075,10 @@ export function StackBuilder({
     commitItems(adjusted);
   };
 
+  const resolvedTargetStackOuterDiameterMm = Number(
+    getTargetStackOuterDiameter(orderedItems, mechanicalParts, project.cadDefaults).toFixed(2)
+  );
+
   return (
     <div className="space-y-4">
       <AddStackItemModal onAdd={addItem} />
@@ -989,6 +1086,46 @@ export function StackBuilder({
         <Button variant="ghost" onClick={autoFitAllSpacers} className="text-xs">
           Auto-fit barrel + spacer + retaining rings
         </Button>
+      </div>
+      <div className="panel space-y-3 p-4">
+        <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">
+          Stack Diameter Target
+        </h3>
+        <div className="grid gap-4 md:grid-cols-2">
+          <NumberInput
+            label="Cup-to-carrier clearance (mm)"
+            value={project.cadDefaults.cupToCarrierClearanceMm ?? DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM}
+            min={0}
+            step={0.01}
+            onChange={(event) =>
+              updateCadDefaults((defaults) => ({
+                ...defaults,
+                cupToCarrierClearanceMm: Number.isFinite(event.target.valueAsNumber)
+                  ? event.target.valueAsNumber
+                  : DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM
+              }))
+            }
+          />
+          <NumberInput
+            label="Target stack outer diameter override (mm, 0 = auto)"
+            value={project.cadDefaults.targetStackOuterDiameterMm ?? 0}
+            min={0}
+            step={0.01}
+            onChange={(event) =>
+              updateCadDefaults((defaults) => ({
+                ...defaults,
+                targetStackOuterDiameterMm:
+                  Number.isFinite(event.target.valueAsNumber) && event.target.valueAsNumber > 0
+                    ? event.target.valueAsNumber
+                    : undefined
+              }))
+            }
+          />
+        </div>
+        <p className="text-xs leading-relaxed text-labMuted">
+          Auto target stack OD: {resolvedTargetStackOuterDiameterMm.toFixed(2)} mm. Spacers in auto mode and generated
+          lens cups use this shared OD so the optical stack stays cylindrical inside the sliding carrier.
+        </p>
       </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[360px_1fr_360px]">
         <section className="panel space-y-2 p-4">

@@ -51,6 +51,34 @@ export default function SettingsPage() {
             onChange={(event) => setDefaults((prev) => (prev ? { ...prev, wallThicknessMm: Number(event.target.value) } : prev))}
           />
           <NumberInput
+            label="Cup-to-carrier clearance (mm)"
+            value={defaults.cupToCarrierClearanceMm ?? 0.6}
+            min={0}
+            step={0.01}
+            onChange={(event) =>
+              setDefaults((prev) =>
+                prev ? { ...prev, cupToCarrierClearanceMm: Number(event.target.value) } : prev
+              )
+            }
+          />
+          <NumberInput
+            label="Target stack outer diameter override (mm, 0 = auto)"
+            value={defaults.targetStackOuterDiameterMm ?? 0}
+            min={0}
+            step={0.01}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setDefaults((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      targetStackOuterDiameterMm: Number.isFinite(next) && next > 0 ? next : undefined
+                    }
+                  : prev
+              );
+            }}
+          />
+          <NumberInput
             label="Retaining lip (mm)"
             value={defaults.retainingLipMm}
             min={0}

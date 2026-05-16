@@ -53,6 +53,8 @@ export type CadDefaults = {
   connectorDiscOuterDiameterMm?: number;
   connectorDiscInnerDiameterMm?: number;
   connectorDiscThicknessMm?: number;
+  cupToCarrierClearanceMm?: number;
+  targetStackOuterDiameterMm?: number;
   connectorOverlapIntoPlMm?: number;
   barrelToDiscOverlapMm?: number;
   connectorDiscOverlapWithBarrelMm?: number;
