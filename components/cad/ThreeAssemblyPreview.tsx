@@ -18,23 +18,80 @@ type ThreeAssemblyPreviewProps = {
   onSelectId: (id: string | null) => void;
   onAvailabilityChange?: (available: boolean) => void;
   resetSignal: number;
+  displayOptions: ThreeAssemblyDisplayOptions;
 };
 
 type RoleVisualStyle = {
   color: number;
-  opacity: number;
   metalness: number;
   roughness: number;
 };
 
 const ROLE_VISUAL_STYLE: Record<AssemblyPreviewColorRole, RoleVisualStyle> = {
-  cup: { color: 0xf2bf4e, opacity: 0.94, metalness: 0.2, roughness: 0.52 },
-  spacer: { color: 0xd9e1e8, opacity: 0.92, metalness: 0.12, roughness: 0.6 },
-  insert: { color: 0xff9e57, opacity: 0.94, metalness: 0.1, roughness: 0.45 },
-  carrier: { color: 0x67d29f, opacity: 0.26, metalness: 0.08, roughness: 0.55 },
-  barrel: { color: 0x62b8d8, opacity: 0.22, metalness: 0.08, roughness: 0.6 },
-  ring: { color: 0xb9c3cd, opacity: 0.9, metalness: 0.1, roughness: 0.64 },
-  custom: { color: 0xb6c2d6, opacity: 0.9, metalness: 0.12, roughness: 0.62 }
+  cup: { color: 0xf2bf4e, metalness: 0.2, roughness: 0.52 },
+  spacer: { color: 0xd9e1e8, metalness: 0.12, roughness: 0.6 },
+  insert: { color: 0xff9e57, metalness: 0.1, roughness: 0.45 },
+  carrier: { color: 0x67d29f, metalness: 0.08, roughness: 0.55 },
+  barrel: { color: 0x62b8d8, metalness: 0.08, roughness: 0.6 },
+  ring: { color: 0xb9c3cd, metalness: 0.1, roughness: 0.64 },
+  custom: { color: 0xb6c2d6, metalness: 0.12, roughness: 0.62 }
+};
+
+const XRAY_ROLE_OPACITY: Record<AssemblyPreviewColorRole, number> = {
+  cup: 0.72,
+  spacer: 0.66,
+  insert: 0.94,
+  carrier: 0.22,
+  barrel: 0.16,
+  ring: 0.68,
+  custom: 0.68
+};
+
+const SOLID_ROLE_OPACITY: Record<AssemblyPreviewColorRole, number> = {
+  cup: 0.84,
+  spacer: 0.82,
+  insert: 0.98,
+  carrier: 0.36,
+  barrel: 0.3,
+  ring: 0.82,
+  custom: 0.82
+};
+
+function getRoleOpacity(role: AssemblyPreviewColorRole, xRayMode: boolean): number {
+  return xRayMode ? XRAY_ROLE_OPACITY[role] : SOLID_ROLE_OPACITY[role];
+}
+
+function getRoleRenderOrder(role: AssemblyPreviewColorRole): number {
+  if (role === "barrel") return 0;
+  if (role === "carrier") return 1;
+  return 2;
+}
+
+function shouldShowPartByRole(
+  part: AssemblyPreviewPart,
+  options: ThreeAssemblyDisplayOptions
+): boolean {
+  if (part.colorRole === "cup" || part.colorRole === "spacer" || part.colorRole === "ring") {
+    return options.showCupsAndSpacers;
+  }
+  if (part.colorRole === "insert" || part.type === "iris" || part.type === "filter" || part.type === "diffusion") {
+    return options.showInserts;
+  }
+  if (part.type === "custom" && part.colorRole !== "custom") {
+    return options.showInserts;
+  }
+  if (part.colorRole === "custom") {
+    return options.showCupsAndSpacers || options.showInserts;
+  }
+  return true;
+}
+
+export type ThreeAssemblyDisplayOptions = {
+  showFixedBarrel: boolean;
+  showCarrier: boolean;
+  showCupsAndSpacers: boolean;
+  showInserts: boolean;
+  xRayMode: boolean;
 };
 
 function resolveInnerDiameterMm(part: AssemblyPreviewPart): number {
@@ -65,7 +122,8 @@ export function ThreeAssemblyPreview({
   selectedId,
   onSelectId,
   onAvailabilityChange,
-  resetSignal
+  resetSignal,
+  displayOptions
 }: ThreeAssemblyPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -85,9 +143,15 @@ export function ThreeAssemblyPreview({
   const availabilityRef = useRef<ViewerAvailability>("loading");
 
   const bounds = useMemo(() => {
+    const fallbackLength = Math.max(
+      1,
+      derived.mechanicalStackLengthMm,
+      derived.carrierLengthMm,
+      derived.fixedBarrelLengthMm
+    );
     const start = parts.length > 0 ? parts[0].displayStartMm : 0;
-    const end = parts.length > 0 ? parts[parts.length - 1].displayEndMm : 1;
-    const displayLength = Math.max(1, end - start);
+    const end = parts.length > 0 ? parts[parts.length - 1].displayEndMm : start + fallbackLength;
+    const displayLength = Math.max(1, end - start, fallbackLength);
     const maxPartDiameter = parts.reduce((max, part) => Math.max(max, part.outerDiameterMm), 0);
     const maxDiameter = Math.max(maxPartDiameter, derived.carrierOuterDiameterMm, derived.fixedBarrelOuterDiameterMm, 12);
     return {
@@ -96,7 +160,14 @@ export function ThreeAssemblyPreview({
       lengthMm: displayLength,
       maxDiameterMm: maxDiameter
     };
-  }, [parts, derived.carrierOuterDiameterMm, derived.fixedBarrelOuterDiameterMm]);
+  }, [
+    parts,
+    derived.mechanicalStackLengthMm,
+    derived.carrierLengthMm,
+    derived.fixedBarrelLengthMm,
+    derived.carrierOuterDiameterMm,
+    derived.fixedBarrelOuterDiameterMm
+  ]);
 
   const setAvailabilityState = (next: ViewerAvailability) => {
     if (availabilityRef.current === next) return;
@@ -359,6 +430,7 @@ export function ThreeAssemblyPreview({
       selected: boolean;
       transparentOverride?: boolean;
       opacityOverride?: number;
+      shellMode?: "none" | "carrier" | "barrel";
     }) => {
       const group = new THREE.Group();
       group.name = `${params.id}:${params.label}`;
@@ -368,30 +440,36 @@ export function ThreeAssemblyPreview({
       const outerRadiusMm = Math.max(0.25, params.outerDiameterMm * 0.5);
       const innerDiameterMm = Math.max(0, toFinitePositive(params.innerDiameterMm));
       const innerRadiusMm = Math.max(0, innerDiameterMm * 0.5);
+      const isShell = params.shellMode === "carrier" || params.shellMode === "barrel";
+      const opacity = params.opacityOverride ?? getRoleOpacity(params.role, displayOptions.xRayMode);
+      const renderOrder = getRoleRenderOrder(params.role);
 
       const outerGeometry = new THREE.CylinderGeometry(outerRadiusMm, outerRadiusMm, lengthMm, 56, 1, false);
       const outerMaterial = new THREE.MeshStandardMaterial({
         color: style.color,
-        transparent: params.transparentOverride ?? style.opacity < 0.99,
-        opacity: params.opacityOverride ?? style.opacity,
+        transparent: params.transparentOverride ?? opacity < 0.999 || isShell,
+        opacity,
         metalness: style.metalness,
-        roughness: style.roughness
+        roughness: style.roughness,
+        depthWrite: !isShell,
+        side: isShell ? THREE.DoubleSide : THREE.FrontSide
       });
       if (params.selected) {
         outerMaterial.emissive = new THREE.Color(0x6da8ff);
-        outerMaterial.emissiveIntensity = 0.45;
+        outerMaterial.emissiveIntensity = isShell ? 0.25 : 0.45;
       }
       const outerMesh = new THREE.Mesh(outerGeometry, outerMaterial);
       outerMesh.rotation.z = Math.PI / 2;
       outerMesh.position.x = params.centerXmm;
       outerMesh.userData.partId = params.id;
+      outerMesh.renderOrder = renderOrder;
       group.add(outerMesh);
       pickableRef.current.push(outerMesh);
 
       const effectiveInnerRadiusMm =
         innerRadiusMm > 0 && innerRadiusMm < outerRadiusMm - 0.18 ? innerRadiusMm : 0;
 
-      if (effectiveInnerRadiusMm > 0) {
+      if (effectiveInnerRadiusMm > 0 && !isShell) {
         const innerGeometry = new THREE.CylinderGeometry(
           effectiveInnerRadiusMm,
           effectiveInnerRadiusMm,
@@ -409,6 +487,7 @@ export function ThreeAssemblyPreview({
         innerMesh.rotation.z = Math.PI / 2;
         innerMesh.position.x = params.centerXmm;
         innerMesh.userData.partId = params.id;
+        innerMesh.renderOrder = renderOrder + 0.1;
         group.add(innerMesh);
         pickableRef.current.push(innerMesh);
       }
@@ -431,8 +510,10 @@ export function ThreeAssemblyPreview({
       rimFront.rotation.y = Math.PI / 2;
       rimFront.position.x = params.centerXmm - lengthMm * 0.5;
       rimFront.userData.partId = params.id;
+      rimFront.renderOrder = renderOrder + 0.15;
       const rimBack = rimFront.clone();
       rimBack.position.x = params.centerXmm + lengthMm * 0.5;
+      rimBack.renderOrder = renderOrder + 0.15;
       group.add(rimFront);
       group.add(rimBack);
       pickableRef.current.push(rimFront, rimBack);
@@ -441,6 +522,7 @@ export function ThreeAssemblyPreview({
     };
 
     parts.forEach((part) => {
+      if (!shouldShowPartByRole(part, displayOptions)) return;
       const centerXmm = centeredX(part.displayStartMm + part.lengthMm * 0.5);
       const inferredInnerMm = resolveInnerDiameterMm(part);
       const tube = createTubeGroup({
@@ -457,36 +539,41 @@ export function ThreeAssemblyPreview({
     });
 
     const barrelLengthMm = Math.max(derived.fixedBarrelLengthMm, bounds.lengthMm);
-    const barrelCenterXmm = centeredX(bounds.startMm + barrelLengthMm * 0.5);
-    const barrel = createTubeGroup({
-      id: "__fixed_barrel",
-      label: "Fixed PL barrel",
-      lengthMm: barrelLengthMm,
-      outerDiameterMm: Math.max(derived.fixedBarrelOuterDiameterMm, derived.fixedBarrelInnerDiameterMm + 0.2),
-      innerDiameterMm: derived.fixedBarrelInnerDiameterMm,
-      centerXmm: barrelCenterXmm,
-      role: "barrel",
-      selected: selectedId === "__fixed_barrel",
-      transparentOverride: true,
-      opacityOverride: 0.2
-    });
-    rootGroup.add(barrel);
-
     const carrierLengthMm = Math.max(derived.carrierLengthMm, bounds.lengthMm);
-    const carrierCenterXmm = centeredX(bounds.startMm + carrierLengthMm * 0.5);
-    const carrier = createTubeGroup({
-      id: "__carrier",
-      label: "Sliding optical carrier",
-      lengthMm: carrierLengthMm,
-      outerDiameterMm: Math.max(derived.carrierOuterDiameterMm, derived.carrierInnerDiameterMm + 0.2),
-      innerDiameterMm: derived.carrierInnerDiameterMm,
-      centerXmm: carrierCenterXmm,
-      role: "carrier",
-      selected: selectedId === "__carrier",
-      transparentOverride: true,
-      opacityOverride: 0.24
-    });
-    rootGroup.add(carrier);
+
+    if (displayOptions.showFixedBarrel) {
+      const barrelCenterXmm = centeredX(bounds.startMm + barrelLengthMm * 0.5);
+      const barrel = createTubeGroup({
+        id: "__fixed_barrel",
+        label: "Fixed PL barrel",
+        lengthMm: barrelLengthMm,
+        outerDiameterMm: Math.max(derived.fixedBarrelOuterDiameterMm, derived.fixedBarrelInnerDiameterMm + 0.2),
+        innerDiameterMm: derived.fixedBarrelInnerDiameterMm,
+        centerXmm: barrelCenterXmm,
+        role: "barrel",
+        selected: selectedId === "__fixed_barrel",
+        transparentOverride: true,
+        shellMode: "barrel"
+      });
+      rootGroup.add(barrel);
+    }
+
+    if (displayOptions.showCarrier) {
+      const carrierCenterXmm = centeredX(bounds.startMm + carrierLengthMm * 0.5);
+      const carrier = createTubeGroup({
+        id: "__carrier",
+        label: "Sliding optical carrier",
+        lengthMm: carrierLengthMm,
+        outerDiameterMm: Math.max(derived.carrierOuterDiameterMm, derived.carrierInnerDiameterMm + 0.2),
+        innerDiameterMm: derived.carrierInnerDiameterMm,
+        centerXmm: carrierCenterXmm,
+        role: "carrier",
+        selected: selectedId === "__carrier",
+        transparentOverride: true,
+        shellMode: "carrier"
+      });
+      rootGroup.add(carrier);
+    }
 
     const axisMaterial = new THREE.LineBasicMaterial({ color: 0x4d84c3, transparent: true, opacity: 0.8 });
     const axisGeometry = new THREE.BufferGeometry().setFromPoints([
@@ -497,7 +584,7 @@ export function ThreeAssemblyPreview({
     rootGroup.add(axisLine);
 
     positionCamera();
-  }, [parts, derived, selectedId, bounds, sceneReadyVersion, availability]);
+  }, [parts, derived, selectedId, bounds, sceneReadyVersion, availability, displayOptions]);
 
   useEffect(() => {
     if (availabilityRef.current !== "ready") return;

@@ -2,7 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/common/Button";
-import { ThreeAssemblyPreview } from "@/components/cad/ThreeAssemblyPreview";
+import {
+  ThreeAssemblyPreview,
+  type ThreeAssemblyDisplayOptions
+} from "@/components/cad/ThreeAssemblyPreview";
 import {
   getAssemblyPreviewData,
   type AssemblyPreviewCheck,
@@ -142,6 +145,13 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [threeAvailability, setThreeAvailability] = useState<"unknown" | "ready" | "unavailable">("unknown");
   const [threeResetSignal, setThreeResetSignal] = useState(0);
+  const [threeDisplay, setThreeDisplay] = useState<ThreeAssemblyDisplayOptions>({
+    showFixedBarrel: true,
+    showCarrier: true,
+    showCupsAndSpacers: true,
+    showInserts: true,
+    xRayMode: true
+  });
 
   const preview = useMemo(() => getAssemblyPreviewData(project), [project]);
 
@@ -402,7 +412,7 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
   };
 
   return (
-    <div className="panel space-y-4 p-4">
+    <div className="panel space-y-4 overflow-hidden p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">Assembly Preview</h3>
@@ -468,13 +478,68 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
       )}
 
       {viewMode === "interactive_3d" && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="secondary" onClick={() => setThreeResetSignal((value) => value + 1)}>
-            Reset view
-          </Button>
-          <p className="text-xs text-labMuted">
-            3D preview is simplified/parametric. Final geometry should still be checked in OpenSCAD/Cura/FreeCAD.
-          </p>
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="secondary" onClick={() => setThreeResetSignal((value) => value + 1)}>
+              Reset view
+            </Button>
+            <p className="text-xs text-labMuted">
+              3D preview is simplified/parametric. Final geometry should still be checked in OpenSCAD/Cura/FreeCAD.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-labBorder bg-[#0b0b0b] px-3 py-2">
+            <label className="inline-flex items-center gap-2 text-xs text-labMuted">
+              <input
+                type="checkbox"
+                checked={threeDisplay.showFixedBarrel}
+                onChange={(event) =>
+                  setThreeDisplay((previous) => ({ ...previous, showFixedBarrel: event.target.checked }))
+                }
+              />
+              Show fixed barrel
+            </label>
+            <label className="inline-flex items-center gap-2 text-xs text-labMuted">
+              <input
+                type="checkbox"
+                checked={threeDisplay.showCarrier}
+                onChange={(event) =>
+                  setThreeDisplay((previous) => ({ ...previous, showCarrier: event.target.checked }))
+                }
+              />
+              Show optical carrier
+            </label>
+            <label className="inline-flex items-center gap-2 text-xs text-labMuted">
+              <input
+                type="checkbox"
+                checked={threeDisplay.showCupsAndSpacers}
+                onChange={(event) =>
+                  setThreeDisplay((previous) => ({ ...previous, showCupsAndSpacers: event.target.checked }))
+                }
+              />
+              Show cups/spacers
+            </label>
+            <label className="inline-flex items-center gap-2 text-xs text-labMuted">
+              <input
+                type="checkbox"
+                checked={threeDisplay.showInserts}
+                onChange={(event) =>
+                  setThreeDisplay((previous) => ({ ...previous, showInserts: event.target.checked }))
+                }
+              />
+              Show inserts/iris
+            </label>
+            <label className="inline-flex items-center gap-2 text-xs text-labMuted">
+              <input
+                type="checkbox"
+                checked={threeDisplay.xRayMode}
+                onChange={(event) =>
+                  setThreeDisplay((previous) => ({ ...previous, xRayMode: event.target.checked }))
+                }
+              />
+              X-ray mode
+            </label>
+          </div>
         </div>
       )}
 
@@ -499,6 +564,7 @@ export function AssemblyPreviewPanel({ project }: { project: LensProject }) {
           onSelectId={setSelectedId}
           onAvailabilityChange={(available) => setThreeAvailability(available ? "ready" : "unavailable")}
           resetSignal={threeResetSignal}
+          displayOptions={threeDisplay}
         />
       ) : (
         <div className="overflow-x-auto rounded-xl border border-labBorder bg-[#060606]">{renderSide2D()}</div>
