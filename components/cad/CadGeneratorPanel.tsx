@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CadPartSelector, type CadPartType } from "@/components/cad/CadPartSelector";
+import { AssemblyPreviewPanel } from "@/components/cad/AssemblyPreviewPanel";
 import { PartSpecCard } from "@/components/cad/PartSpecCard";
 import { ScadCodeViewer } from "@/components/cad/ScadCodeViewer";
 import { Button } from "@/components/common/Button";
@@ -3111,6 +3112,8 @@ ${dedupErrors.length ? dedupErrors.map((line) => `- ${line}`).join("\n") : "- no
           </div>
         )}
       </div>
+
+      <AssemblyPreviewPanel project={project} />
 
       <PartSpecCard title="Auto-fit System" specs={autoFitSystemSpecs} />
       <PartSpecCard title="Part Specs" specs={specs} />
