@@ -154,7 +154,7 @@ export function ThreeAssemblyPreview({
 
       try {
         const THREE = await import("three");
-        const orbitModule = await import("three/examples/jsm/controls/OrbitControls.js");
+        const orbitModule = await import("three/examples/jsm/controls/OrbitControls");
         if (cancelled) return;
 
         THREERef.current = THREE;
