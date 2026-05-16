@@ -102,7 +102,8 @@ function getQuickSpecs(item: StackItem): string {
           `ID ${formatMm(item.innerDiameterMm)}`,
           `OD ${formatMm(item.outerDiameterMm)}`,
           `Air ${formatMm(desiredOpticalAirGapMm)}`,
-          `Print ${formatMm(printedSpacerThicknessMm)}`
+          `Print ${formatMm(printedSpacerThicknessMm)}`,
+          (item.insertedItems?.length ?? 0) > 0 ? `Inserts ${item.insertedItems?.length ?? 0}` : undefined
         ]
           .filter(Boolean)
           .join("  ·  ");

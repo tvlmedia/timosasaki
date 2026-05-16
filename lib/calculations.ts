@@ -1,4 +1,5 @@
 import { getItemOpticalTypeLabel } from "@/lib/stackMeta";
+import { calculateAirspaceInsertLayouts } from "@/lib/airspaceInserts";
 import type { CadDefaults, StackItem } from "@/types";
 
 const DEFAULT_MIN_CUP_WALL_THICKNESS_MM = 2.0;
@@ -289,6 +290,16 @@ export function getStackWarnings(items: StackItem[], defaults: CadDefaults): str
       if (getSpacerWallWidth(item) < 1.2) {
         warnings.push(`${item.name || "Spacer / Air Gap Ring"} wall may be fragile for FDM printing.`);
       }
+
+      const airspaceInsertLayouts = calculateAirspaceInsertLayouts(desiredOpticalAirGapMm, item.insertedItems, {
+        targetStackOuterDiameterMm: getTargetStackOuterDiameterForWarnings(orderedItems, defaults),
+        nearbyClearApertureMm: nearbyAperture
+      });
+      airspaceInsertLayouts.forEach((layout) => {
+        layout.warnings.forEach((warning) => {
+          warnings.push(`${item.name || "Spacer / Air Gap Ring"} · ${layout.item.label}: ${warning}`);
+        });
+      });
     }
 
     if (item.type === "iris") {
@@ -389,6 +400,18 @@ export function getPartWarnings(item: StackItem, defaults: CadDefaults): string[
   }
   if (item.type === "spacer" && item.outerDiameterMm <= item.innerDiameterMm) {
     warnings.push("Spacer OD must be larger than spacer ID.");
+  }
+  if (item.type === "spacer") {
+    const layouts = calculateAirspaceInsertLayouts(
+      getSpacerDesiredOpticalAirGapMm(item),
+      item.insertedItems,
+      { targetStackOuterDiameterMm: item.outerDiameterMm }
+    );
+    layouts.forEach((layout) => {
+      layout.warnings.forEach((warning) => {
+        warnings.push(`${layout.item.label}: ${warning}`);
+      });
+    });
   }
   if (item.type === "iris" && item.apertureDiameterMm > item.diskDiameterMm) {
     warnings.push("Iris aperture cannot be larger than disk diameter.");

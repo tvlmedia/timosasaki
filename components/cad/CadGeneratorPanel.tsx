@@ -8,6 +8,10 @@ import { NumberInput } from "@/components/common/NumberInput";
 import { Select } from "@/components/common/Select";
 import { WarningBox } from "@/components/common/WarningBox";
 import {
+  calculateAirspaceInsertLayouts,
+  getAirspaceInsertedItemsTotalThicknessMm
+} from "@/lib/airspaceInserts";
+import {
   getPartWarnings,
   getLargestGlassDiameter,
   getRecommendedBarrelInnerDiameter,
@@ -79,6 +83,11 @@ type CarrierLengthDerivedSource = "manual" | "optical_stack_length";
 type SlotLengthSource = "focus_travel" | "manual_default";
 type ResolvedCupInsertionSide = "front" | "rear";
 type ResolvedCupRetainingSide = "front" | "rear" | "both" | "none";
+
+type CadSourceCandidate = {
+  id: string;
+  sourceItem: StackItem;
+};
 
 type CascadeSizing = {
   sourceGlass?: Extract<StackItem, { type: "glass" }>;
@@ -425,7 +434,7 @@ function getSpacerThicknessSource(
 function getSpacerInsertedItemsTotalThicknessMm(spacer: Extract<StackItem, { type: "spacer" }> | undefined): number {
   if (!spacer) return 0;
   if (toPositive(spacer.insertedItemsTotalThicknessMm) > 0) return spacer.insertedItemsTotalThicknessMm as number;
-  return (spacer.insertedItems ?? []).reduce((sum, item) => sum + toPositive(item.thicknessMm), 0);
+  return getAirspaceInsertedItemsTotalThicknessMm(spacer.insertedItems);
 }
 
 function resolveCascadeSourceGlass(project: LensProject): Extract<StackItem, { type: "glass" }> | undefined {
@@ -1198,6 +1207,148 @@ function createPayload(
   }
 }
 
+function getTargetStackOuterDiameterForAirspaceInsertDefaults(project: LensProject): number {
+  const manualTarget = toPositive(project.cadDefaults.targetStackOuterDiameterMm);
+  if (manualTarget > 0) return manualTarget;
+
+  const largestGlassDiameterMm = getLargestGlassDiameter(project.stackItems);
+  if (largestGlassDiameterMm > 0) {
+    return Math.max(
+      4,
+      roundUpToIncrement(
+        largestGlassDiameterMm + DEFAULT_MINIMUM_CUP_WALL_THICKNESS_MM * 2,
+        DEFAULT_SHARED_STACK_ROUNDING_INCREMENT_MM
+      )
+    );
+  }
+
+  const spacerOuterDiameterMm = project.stackItems
+    .filter((item): item is Extract<StackItem, { type: "spacer" }> => item.type === "spacer")
+    .reduce((max, spacer) => Math.max(max, toPositive(spacer.outerDiameterMm)), 0);
+  if (spacerOuterDiameterMm > 0) return spacerOuterDiameterMm;
+  return Math.max(10, toPositive(project.cadDefaults.defaultOuterDiameterMm));
+}
+
+function buildCadSourceCandidates(project: LensProject, partType: CadPartType): CadSourceCandidate[] {
+  const requiredType = needsSource[partType];
+  if (!requiredType) return [];
+
+  const baseCandidates: CadSourceCandidate[] = project.stackItems
+    .filter((item) => item.type === requiredType)
+    .map((item) => ({
+      id: item.id,
+      sourceItem: item
+    }));
+
+  if (partType !== "spacer_ring" && partType !== "iris_disk" && partType !== "diffusion_holder") {
+    return baseCandidates;
+  }
+
+  const targetStackOuterDiameterMm = getTargetStackOuterDiameterForAirspaceInsertDefaults(project);
+  const spacerItems = [...project.stackItems]
+    .sort((a, b) => a.positionIndex - b.positionIndex)
+    .filter((item): item is Extract<StackItem, { type: "spacer" }> => item.type === "spacer");
+  const virtualCandidates: CadSourceCandidate[] = [];
+
+  spacerItems.forEach((spacer) => {
+    const desiredOpticalAirGapMm =
+      getSpacerDesiredOpticalAirGapMm(spacer) > 0
+        ? getSpacerDesiredOpticalAirGapMm(spacer)
+        : toPositive(spacer.thicknessMm);
+    const layouts = calculateAirspaceInsertLayouts(desiredOpticalAirGapMm, spacer.insertedItems, {
+      targetStackOuterDiameterMm
+    });
+
+    layouts.forEach((layout) => {
+      const insert = layout.item;
+      const fallbackDiskDiameterMm =
+        toPositive(insert.diskDiameterMm) > 0
+          ? (insert.diskDiameterMm as number)
+          : toPositive(spacer.outerDiameterMm) > 0
+            ? (spacer.outerDiameterMm as number)
+            : targetStackOuterDiameterMm;
+
+      if (partType === "spacer_ring") {
+        const baseSpacer = {
+          ...spacer,
+          insertedItems: [],
+          insertedItemsTotalThicknessMm: 0,
+          physicalSpacerThicknessSource: "same_as_airspace" as const
+        };
+
+        if (layout.spacerBeforeMm > 0) {
+          virtualCandidates.push({
+            id: `${spacer.id}::${insert.id}::before`,
+            sourceItem: {
+              ...baseSpacer,
+              id: `${spacer.id}::${insert.id}::before`,
+              name: `${spacer.name} · ${insert.label} · spacer before`,
+              thicknessMm: Number(layout.spacerBeforeMm.toFixed(3)),
+              desiredOpticalAirGapMm: Number(layout.spacerBeforeMm.toFixed(3)),
+              physicalSpacerThicknessMm: Number(layout.spacerBeforeMm.toFixed(3))
+            }
+          });
+        }
+        if (layout.spacerAfterMm > 0) {
+          virtualCandidates.push({
+            id: `${spacer.id}::${insert.id}::after`,
+            sourceItem: {
+              ...baseSpacer,
+              id: `${spacer.id}::${insert.id}::after`,
+              name: `${spacer.name} · ${insert.label} · spacer after`,
+              thicknessMm: Number(layout.spacerAfterMm.toFixed(3)),
+              desiredOpticalAirGapMm: Number(layout.spacerAfterMm.toFixed(3)),
+              physicalSpacerThicknessMm: Number(layout.spacerAfterMm.toFixed(3))
+            }
+          });
+        }
+      }
+
+      if (partType === "iris_disk" && (insert.type === "iris" || insert.type === "filter" || insert.type === "custom")) {
+        virtualCandidates.push({
+          id: `${spacer.id}::${insert.id}::disk`,
+          sourceItem: {
+            id: `${spacer.id}::${insert.id}::disk`,
+            type: "iris",
+            name: `${insert.label} · in ${spacer.name}`,
+            positionIndex: spacer.positionIndex,
+            diskDiameterMm: Number(Math.max(0.1, fallbackDiskDiameterMm).toFixed(3)),
+            apertureDiameterMm: Number(
+              Math.max(0.1, toPositive(insert.apertureDiameterMm) || 14).toFixed(3)
+            ),
+            thicknessMm: Number(Math.max(0.1, toPositive(insert.thicknessMm)).toFixed(3)),
+            isOval: false
+          }
+        });
+      }
+
+      if (partType === "diffusion_holder" && insert.type === "diffusion") {
+        const diskDiameterMm = Number(Math.max(0.1, fallbackDiskDiameterMm).toFixed(3));
+        virtualCandidates.push({
+          id: `${spacer.id}::${insert.id}::diff`,
+          sourceItem: {
+            id: `${spacer.id}::${insert.id}::diff`,
+            type: "diffusion",
+            name: `${insert.label} · in ${spacer.name}`,
+            positionIndex: spacer.positionIndex,
+            diskDiameterMm,
+            clearCenterDiameterMm: Number(
+              Math.max(0.1, toPositive(insert.apertureDiameterMm) || 12).toFixed(3)
+            ),
+            diffusionOuterDiameterMm: Number(Math.max(0.1, diskDiameterMm - 1.2).toFixed(3)),
+            thicknessMm: Number(Math.max(0.1, toPositive(insert.thicknessMm)).toFixed(3))
+          }
+        });
+      }
+    });
+  });
+
+  if (partType === "spacer_ring" && virtualCandidates.length > 0) {
+    return [...virtualCandidates, ...baseCandidates];
+  }
+  return [...baseCandidates, ...virtualCandidates];
+}
+
 export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const [partType, setPartType] = useState<CadPartType>("element_cup");
   const [sourceItemId, setSourceItemId] = useState<string | undefined>();
@@ -1219,17 +1370,19 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const focusDerived = getFocusTravelDerived(project);
 
   const sourceCandidates = useMemo(() => {
-    const requiredType = needsSource[partType];
-    if (!requiredType) return [];
-    return project.stackItems.filter((item) => item.type === requiredType);
-  }, [partType, project.stackItems]);
+    return buildCadSourceCandidates(project, partType);
+  }, [partType, project]);
 
   useEffect(() => {
     if (!sourceCandidates.length) {
       setSourceItemId(undefined);
       return;
     }
-    setSourceItemId((current) => (current && sourceCandidates.some((item) => item.id === current) ? current : sourceCandidates[0].id));
+    setSourceItemId((current) =>
+      current && sourceCandidates.some((candidate) => candidate.id === current)
+        ? current
+        : sourceCandidates[0].id
+    );
   }, [sourceCandidates]);
 
   useEffect(() => {
@@ -1237,7 +1390,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     setFixedPlOverlapMm(Math.max(2.0, project.cadDefaults.plReferenceOverlapMm ?? 2.0));
   }, [project.cadDefaults.plBarrelAttachZMm, project.cadDefaults.plReferenceOverlapMm]);
 
-  const sourceItem = sourceCandidates.find((item) => item.id === sourceItemId);
+  const selectedSourceCandidate = sourceCandidates.find((candidate) => candidate.id === sourceItemId);
+  const sourceItem = selectedSourceCandidate?.sourceItem;
   const slidingCarrierOverrides: SlidingCarrierOverrides = {
     lengthSource: slidingCarrierLengthSource,
     manualLengthMm: slidingCarrierManualLengthMm
@@ -1895,9 +2049,9 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
           disabled={sourceCandidates.length === 0}
         >
           {sourceCandidates.length === 0 && <option value="">No matching stack item</option>}
-          {sourceCandidates.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name}
+          {sourceCandidates.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>
+              {candidate.sourceItem.name}
             </option>
           ))}
         </Select>

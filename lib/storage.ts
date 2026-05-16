@@ -1,6 +1,10 @@
 import { createDemoProject, createEmptyMeasurementsState, defaultCadDefaults, defaultTargetLook } from "@/lib/defaults";
 import { defaultFocusTravelSetup, normalizeFocusTravelSetup } from "@/lib/focusTravel";
 import { createId, safeFileName } from "@/lib/ids";
+import {
+  getAirspaceInsertedItemsTotalThicknessMm,
+  normalizeAirspaceInsertedItems
+} from "@/lib/airspaceInserts";
 import type {
   BaselineAirGap,
   BaselinePhysicalComponent,
@@ -50,15 +54,6 @@ function isLensProjectCandidate(value: unknown): value is LensProject {
 function toPositive(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
   return value;
-}
-
-function sumInsertedItemsThickness(
-  insertedItems: Array<{ thicknessMm?: number }> | undefined
-): number {
-  return (insertedItems ?? []).reduce((sum, item) => {
-    const thickness = toPositive(item.thicknessMm);
-    return thickness > 0 ? sum + thickness : sum;
-  }, 0);
 }
 
 function normalizePhysicalSpacerThicknessSource(value: unknown): PhysicalSpacerThicknessSource {
@@ -199,11 +194,11 @@ export function normalizeProject(project: LensProject): LensProject {
           const physicalSpacerThicknessSource = normalizePhysicalSpacerThicknessSource(
             base.physicalSpacerThicknessSource
           );
-          const insertedItems = base.insertedItems ?? [];
+          const insertedItems = normalizeAirspaceInsertedItems(base.insertedItems);
           const insertedItemsTotalThicknessMm =
             toPositive(base.insertedItemsTotalThicknessMm) > 0
               ? (base.insertedItemsTotalThicknessMm as number)
-              : sumInsertedItemsThickness(insertedItems);
+              : getAirspaceInsertedItemsTotalThicknessMm(insertedItems);
           return {
             ...base,
             thicknessMm: physicalSpacerThicknessMm,
@@ -428,7 +423,7 @@ function normalizeMeasurements(
                 ),
                 airspaceMeasurementType: annotation.fields?.airspaceMeasurementType ?? "unknown",
                 airspaceConfidence: annotation.fields?.airspaceConfidence ?? "unknown",
-                insertedItems: annotation.fields?.insertedItems ?? []
+                insertedItems: normalizeAirspaceInsertedItems(annotation.fields?.insertedItems)
               }
             : (annotation.fields ?? {}),
       createdAt: annotation.createdAt ?? nowIso,

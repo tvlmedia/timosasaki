@@ -2,6 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getRecommendedBarrelInnerDiameter, getTotalStackLength } from "@/lib/calculations";
+import {
+  calculateAirspaceInsertLayouts,
+  createDefaultAirspaceInsertedItem,
+  getAirspaceInsertedItemsTotalThicknessMm,
+  normalizeAirspaceInsertedItems
+} from "@/lib/airspaceInserts";
 import { createId } from "@/lib/ids";
 import { defaultOpticalTypeByStackType, getItemOpticalType, opticalTypeOptions } from "@/lib/stackMeta";
 import { Button } from "@/components/common/Button";
@@ -21,6 +27,7 @@ import type {
   LensProject,
   MechanicalPart,
   OpticalItemType,
+  AirspaceInsertedItem,
   StackItem,
   StackItemType,
   StepDirection
@@ -105,6 +112,16 @@ const airspaceMeasurementTypeOptions: Array<{
   { value: "physical_caliper_estimate", label: "Physical caliper estimate" },
   { value: "estimated", label: "Estimated" },
   { value: "unknown", label: "Unknown" }
+];
+
+const airspaceInsertedPositionModeOptions: Array<{
+  value: "centered" | "distance_from_front" | "distance_from_rear" | "manual_split";
+  label: string;
+}> = [
+  { value: "centered", label: "Centered" },
+  { value: "distance_from_front", label: "Distance from front" },
+  { value: "distance_from_rear", label: "Distance from rear" },
+  { value: "manual_split", label: "Manual split" }
 ];
 
 const DEFAULT_CUP_TO_CARRIER_CLEARANCE_MM = 0.6;
@@ -712,6 +729,8 @@ function applyAutoFitSpacerDimensions(
     const auto = deriveSpacerRingDimensions(items, mechanicalParts, defaults, index, item);
     const desiredOpticalAirGapMm = getSpacerDesiredOpticalAirGapMm(item);
     const physicalSpacerThicknessMm = getSpacerPhysicalThicknessMm(item);
+    const insertedItems = normalizeAirspaceInsertedItems(item.insertedItems);
+    const insertedItemsTotalThicknessMm = getAirspaceInsertedItemsTotalThicknessMm(insertedItems);
     return {
       ...item,
       ...auto,
@@ -721,8 +740,8 @@ function applyAutoFitSpacerDimensions(
       physicalSpacerThicknessSource: getSpacerThicknessSource(item),
       airspaceMeasurementType: item.airspaceMeasurementType ?? "unknown",
       airspaceConfidence: item.airspaceConfidence ?? "unknown",
-      insertedItems: item.insertedItems ?? [],
-      insertedItemsTotalThicknessMm: item.insertedItemsTotalThicknessMm ?? 0
+      insertedItems,
+      insertedItemsTotalThicknessMm: Number(insertedItemsTotalThicknessMm.toFixed(3))
     };
   });
 }
@@ -767,6 +786,15 @@ function validateItem(item: StackItem): string[] {
       if (item.chamferEnabled && invalid(item.chamferMm)) {
         errors.push("Chamfer must be positive when enabled.");
       }
+      const insertedLayouts = calculateAirspaceInsertLayouts(
+        getSpacerDesiredOpticalAirGapMm(item),
+        item.insertedItems
+      );
+      insertedLayouts.forEach((layout) => {
+        layout.warnings.forEach((warning) => {
+          errors.push(`${layout.item.label}: ${warning}`);
+        });
+      });
       break;
     case "iris":
       if (invalid(item.diskDiameterMm) || invalid(item.apertureDiameterMm) || invalid(item.thicknessMm)) {
@@ -842,6 +870,33 @@ export function StackBuilder({
   const selectedSpacerThicknessSource = selectedSpacer
     ? getSpacerThicknessSource(selectedSpacer)
     : "same_as_airspace";
+  const targetStackOuterDiameterMm = getTargetStackOuterDiameter(
+    orderedItems,
+    mechanicalParts,
+    project.cadDefaults
+  );
+  const selectedSpacerIndex = selectedSpacer
+    ? orderedItems.findIndex((entry) => entry.id === selectedSpacer.id)
+    : -1;
+  const selectedSpacerNearbyApertureMm =
+    selectedSpacerIndex >= 0 ? getNearbyAperture(orderedItems, selectedSpacerIndex) : 0;
+  const selectedSpacerInsertedLayouts = selectedSpacer
+    ? calculateAirspaceInsertLayouts(
+        selectedSpacerDesiredOpticalAirGapMm,
+        selectedSpacer.insertedItems,
+        {
+          targetStackOuterDiameterMm,
+          nearbyClearApertureMm: selectedSpacerNearbyApertureMm
+        }
+      )
+    : [];
+  const selectedSpacerInsertedWarnings = Array.from(
+    new Set(
+      selectedSpacerInsertedLayouts.flatMap((layout) =>
+        layout.warnings.map((warning) => `${layout.item.label}: ${warning}`)
+      )
+    )
+  );
 
   const commitProjectState = (nextItems: StackItem[], nextMechanicalParts: MechanicalPart[]) => {
     const normalizedInput = normalizePositions(nextItems);
@@ -914,6 +969,37 @@ export function StackBuilder({
       if (item.type !== type) return item;
       return updater(item as Extract<StackItem, { type: T }>);
     });
+  };
+
+  const updateSpacerInsertedItems = (
+    spacerId: string,
+    updater: (items: AirspaceInsertedItem[]) => AirspaceInsertedItem[]
+  ) => {
+    updateTypedItem(spacerId, "spacer", (entry) => {
+      const nextItems = normalizeAirspaceInsertedItems(updater(entry.insertedItems ?? []));
+      return {
+        ...entry,
+        insertedItems: nextItems,
+        insertedItemsTotalThicknessMm: Number(getAirspaceInsertedItemsTotalThicknessMm(nextItems).toFixed(3))
+      };
+    });
+  };
+
+  const addInsertedItemToSpacer = (
+    spacerId: string,
+    type: AirspaceInsertedItem["type"],
+    airspaceLabel: string,
+    diskDiameterMm: number
+  ) => {
+    updateSpacerInsertedItems(spacerId, (items) => [
+      ...items,
+      createDefaultAirspaceInsertedItem({
+        id: createId("airspace_insert"),
+        type,
+        airspaceLabel,
+        targetStackOuterDiameterMm: diskDiameterMm
+      })
+    ]);
   };
 
   const setAdvancedProfileEnabled = (glassId: string, enabled: boolean) => {
@@ -1968,6 +2054,339 @@ export function StackBuilder({
                       separately.
                     </p>
                   )}
+                  <div className="rounded-xl border border-labBorder bg-[#0b0b0b] p-3">
+                    <p className="mb-2 text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">
+                      Inserted items inside this airspace
+                    </p>
+                    <p className="text-xs leading-relaxed text-labMuted">
+                      Desired optical airspace stays fixed at {selectedSpacerDesiredOpticalAirGapMm.toFixed(3)}mm.
+                      Inserted items split the generated spacer into before/after sections.
+                    </p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="text-xs"
+                        onClick={() =>
+                          addInsertedItemToSpacer(
+                            selectedItem.id,
+                            "iris",
+                            selectedItem.name || "airspace",
+                            targetStackOuterDiameterMm
+                          )
+                        }
+                      >
+                        Add Iris
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="text-xs"
+                        onClick={() =>
+                          addInsertedItemToSpacer(
+                            selectedItem.id,
+                            "filter",
+                            selectedItem.name || "airspace",
+                            targetStackOuterDiameterMm
+                          )
+                        }
+                      >
+                        Add Filter
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="text-xs"
+                        onClick={() =>
+                          addInsertedItemToSpacer(
+                            selectedItem.id,
+                            "diffusion",
+                            selectedItem.name || "airspace",
+                            targetStackOuterDiameterMm
+                          )
+                        }
+                      >
+                        Add Diffusion
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="text-xs"
+                        onClick={() =>
+                          addInsertedItemToSpacer(
+                            selectedItem.id,
+                            "custom",
+                            selectedItem.name || "airspace",
+                            targetStackOuterDiameterMm
+                          )
+                        }
+                      >
+                        Add Custom Insert
+                      </Button>
+                    </div>
+
+                    {selectedSpacerInsertedLayouts.length === 0 && (
+                      <p className="mt-3 text-xs text-labMuted">
+                        No inserted items yet. Add iris/filter/diffusion/custom inserts here to keep them inside this
+                        airspace without changing total optical stack length.
+                      </p>
+                    )}
+
+                    {selectedSpacerInsertedLayouts.length > 0 && (
+                      <div className="mt-3 space-y-3">
+                        {selectedSpacerInsertedLayouts.map((layout, index) => {
+                          const inserted = layout.item;
+                          const needsApertureField =
+                            inserted.type === "iris" || inserted.type === "filter" || inserted.type === "custom";
+                          return (
+                            <div key={inserted.id} className="rounded-lg border border-labBorder bg-[#090909] p-3">
+                              <p className="mb-2 text-xs uppercase tracking-[0.12em] text-labMuted">
+                                Insert {index + 1} · {inserted.type}
+                              </p>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <Input
+                                  label="Label"
+                                  value={inserted.label}
+                                  onChange={(event) =>
+                                    updateSpacerInsertedItems(selectedItem.id, (items) =>
+                                      items.map((entry) =>
+                                        entry.id === inserted.id ? { ...entry, label: event.target.value } : entry
+                                      )
+                                    )
+                                  }
+                                />
+                                <Select
+                                  label="Position mode"
+                                  value={inserted.positionMode}
+                                  onChange={(event) =>
+                                    updateSpacerInsertedItems(selectedItem.id, (items) =>
+                                      items.map((entry) => {
+                                        if (entry.id !== inserted.id) return entry;
+                                        const nextMode = event.target.value as
+                                          | "centered"
+                                          | "distance_from_front"
+                                          | "distance_from_rear"
+                                          | "manual_split";
+                                        if (nextMode === "manual_split") {
+                                          return {
+                                            ...entry,
+                                            positionMode: nextMode,
+                                            spacerBeforeMm:
+                                              typeof entry.spacerBeforeMm === "number"
+                                                ? entry.spacerBeforeMm
+                                                : layout.spacerBeforeMm,
+                                            spacerAfterMm:
+                                              typeof entry.spacerAfterMm === "number"
+                                                ? entry.spacerAfterMm
+                                                : layout.spacerAfterMm
+                                          };
+                                        }
+                                        return {
+                                          ...entry,
+                                          positionMode: nextMode
+                                        };
+                                      })
+                                    )
+                                  }
+                                >
+                                  {airspaceInsertedPositionModeOptions.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </Select>
+                                <NumberInput
+                                  label="Disk diameter (mm)"
+                                  value={inserted.diskDiameterMm ?? ""}
+                                  min={0}
+                                  step="0.01"
+                                  onChange={(event) =>
+                                    updateSpacerInsertedItems(selectedItem.id, (items) =>
+                                      items.map((entry) =>
+                                        entry.id === inserted.id
+                                          ? {
+                                              ...entry,
+                                              diskDiameterMm: event.target.value
+                                                ? Number(event.target.value)
+                                                : undefined
+                                            }
+                                          : entry
+                                      )
+                                    )
+                                  }
+                                />
+                                <NumberInput
+                                  label="Thickness (mm)"
+                                  value={inserted.thicknessMm}
+                                  min={0}
+                                  step="0.01"
+                                  onChange={(event) =>
+                                    updateSpacerInsertedItems(selectedItem.id, (items) =>
+                                      items.map((entry) =>
+                                        entry.id === inserted.id
+                                          ? {
+                                              ...entry,
+                                              thicknessMm: Number(event.target.value)
+                                            }
+                                          : entry
+                                      )
+                                    )
+                                  }
+                                />
+                                {needsApertureField && (
+                                  <NumberInput
+                                    label="Aperture diameter (mm)"
+                                    value={inserted.apertureDiameterMm ?? ""}
+                                    min={0}
+                                    step="0.01"
+                                    onChange={(event) =>
+                                      updateSpacerInsertedItems(selectedItem.id, (items) =>
+                                        items.map((entry) =>
+                                          entry.id === inserted.id
+                                            ? {
+                                                ...entry,
+                                                apertureDiameterMm: event.target.value
+                                                  ? Number(event.target.value)
+                                                  : undefined
+                                              }
+                                            : entry
+                                        )
+                                      )
+                                    }
+                                  />
+                                )}
+                                {inserted.positionMode === "distance_from_front" && (
+                                  <NumberInput
+                                    label="Distance from front (mm)"
+                                    value={inserted.distanceFromFrontMm ?? ""}
+                                    min={0}
+                                    step="0.01"
+                                    onChange={(event) =>
+                                      updateSpacerInsertedItems(selectedItem.id, (items) =>
+                                        items.map((entry) =>
+                                          entry.id === inserted.id
+                                            ? {
+                                                ...entry,
+                                                distanceFromFrontMm: event.target.value
+                                                  ? Number(event.target.value)
+                                                  : undefined
+                                              }
+                                            : entry
+                                        )
+                                      )
+                                    }
+                                  />
+                                )}
+                                {inserted.positionMode === "distance_from_rear" && (
+                                  <NumberInput
+                                    label="Distance from rear (mm)"
+                                    value={inserted.distanceFromRearMm ?? ""}
+                                    min={0}
+                                    step="0.01"
+                                    onChange={(event) =>
+                                      updateSpacerInsertedItems(selectedItem.id, (items) =>
+                                        items.map((entry) =>
+                                          entry.id === inserted.id
+                                            ? {
+                                                ...entry,
+                                                distanceFromRearMm: event.target.value
+                                                  ? Number(event.target.value)
+                                                  : undefined
+                                              }
+                                            : entry
+                                        )
+                                      )
+                                    }
+                                  />
+                                )}
+                                {inserted.positionMode === "manual_split" && (
+                                  <>
+                                    <NumberInput
+                                      label="Spacer before (mm)"
+                                      value={inserted.spacerBeforeMm ?? ""}
+                                      min={0}
+                                      step="0.01"
+                                      onChange={(event) =>
+                                        updateSpacerInsertedItems(selectedItem.id, (items) =>
+                                          items.map((entry) =>
+                                            entry.id === inserted.id
+                                              ? {
+                                                  ...entry,
+                                                  spacerBeforeMm: event.target.value
+                                                    ? Number(event.target.value)
+                                                    : undefined
+                                                }
+                                              : entry
+                                          )
+                                        )
+                                      }
+                                    />
+                                    <NumberInput
+                                      label="Spacer after (mm)"
+                                      value={inserted.spacerAfterMm ?? ""}
+                                      min={0}
+                                      step="0.01"
+                                      onChange={(event) =>
+                                        updateSpacerInsertedItems(selectedItem.id, (items) =>
+                                          items.map((entry) =>
+                                            entry.id === inserted.id
+                                              ? {
+                                                  ...entry,
+                                                  spacerAfterMm: event.target.value
+                                                    ? Number(event.target.value)
+                                                    : undefined
+                                                }
+                                              : entry
+                                          )
+                                        )
+                                      }
+                                    />
+                                  </>
+                                )}
+                              </div>
+                              <div className="mt-2 rounded-md border border-labBorder bg-[#080808] px-2 py-2 text-xs">
+                                <p className="text-labMuted">
+                                  Calculated spacer before:{" "}
+                                  <span className="mono text-labText">{layout.spacerBeforeMm.toFixed(3)} mm</span>
+                                </p>
+                                <p className="text-labMuted">
+                                  Calculated spacer after:{" "}
+                                  <span className="mono text-labText">{layout.spacerAfterMm.toFixed(3)} mm</span>
+                                </p>
+                                <p className="text-labMuted">
+                                  Total check (before + insert + after):{" "}
+                                  <span className="mono text-labText">{layout.totalMm.toFixed(3)} mm</span>
+                                </p>
+                              </div>
+                              {layout.warnings.length > 0 && (
+                                <div className="mt-2 space-y-1">
+                                  {layout.warnings.map((warning, warningIndex) => (
+                                    <p key={`${inserted.id}-warn-${warningIndex}`} className="text-xs text-labWarning">
+                                      {warning}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                              <div className="mt-3">
+                                <Button
+                                  type="button"
+                                  variant="danger"
+                                  className="w-full"
+                                  onClick={() =>
+                                    updateSpacerInsertedItems(selectedItem.id, (items) =>
+                                      items.filter((entry) => entry.id !== inserted.id)
+                                    )
+                                  }
+                                >
+                                  Delete insert
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                   <label className="flex items-center gap-2 text-sm text-labMuted">
                     <input
                       type="checkbox"
@@ -2382,6 +2801,9 @@ export function StackBuilder({
               )}
 
               <WarningBox title="Inline Validation" lines={selectedErrors} />
+              {selectedSpacer && selectedSpacerInsertedWarnings.length > 0 && (
+                <WarningBox title="AirSpace Insert Warnings" lines={selectedSpacerInsertedWarnings} />
+              )}
               {selectedGlass && <WarningBox title="Advanced Physical Profile Warnings" lines={selectedAdvancedWarnings} />}
             </div>
           )}

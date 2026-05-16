@@ -111,8 +111,22 @@ export type AirspaceInsertedItem = {
   id: string;
   type: "iris" | "filter" | "diffusion" | "custom";
   label?: string;
+  diskDiameterMm?: number;
+  apertureDiameterMm?: number;
   thicknessMm: number;
-  positionMode?: "centered" | "distance_from_previous" | "distance_from_next" | "manual";
+  positionMode?:
+    | "centered"
+    | "distance_from_front"
+    | "distance_from_rear"
+    | "manual_split"
+    | "distance_from_previous"
+    | "distance_from_next"
+    | "manual";
+  distanceFromFrontMm?: number;
+  distanceFromRearMm?: number;
+  spacerBeforeMm?: number;
+  spacerAfterMm?: number;
+  // Legacy field kept for backward compatibility with older projects.
   positionMm?: number;
 };
 
