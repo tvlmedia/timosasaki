@@ -8,9 +8,21 @@ export type LensMountType =
   | "LEICA_M"
   | "CUSTOM";
 
+export type RearCarrierOuterDiameterSource =
+  | "auto_fit_system"
+  | "sliding_carrier_part"
+  | "manual"
+  | "unknown";
+
+export type TargetMountThroatDiameterSource = "mount_preset" | "manual" | "unknown";
+
 export type FocusTravelMovingCarrierPreset = {
   travelMm: number;
+  actualFocusTravelMm?: number;
+  recommendedSlotLengthMm?: number;
+  slotMechanicalClearanceMm?: number;
   rearCarrierOuterDiameterMm?: number;
+  rearCarrierOuterDiameterSource?: RearCarrierOuterDiameterSource;
   sourceSummary?: string;
   createdAt: string;
 };
@@ -29,7 +41,15 @@ export type FocusTravelSetup = {
   closeFocusExtraMarginMm: number;
 
   targetMountThroatDiameterMm?: number;
+  targetMountThroatDiameterSource?: TargetMountThroatDiameterSource;
   rearCarrierOuterDiameterMm?: number;
+  rearCarrierOuterDiameterSource?: RearCarrierOuterDiameterSource;
+  rearCarrierOuterDiameterManualOverride?: boolean;
+
+  actualFocusTravelMm?: number;
+  recommendedPrototypeTravelMm?: number;
+  slotMechanicalClearanceMm?: number;
+  recommendedSlotLengthMm?: number;
 
   notes?: string;
   movingCarrierCadPreset?: FocusTravelMovingCarrierPreset;

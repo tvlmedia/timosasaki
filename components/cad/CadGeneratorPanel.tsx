@@ -61,8 +61,10 @@ type FocusTravelLike = {
   donorFlangeToReferenceCloseFocusMm?: number;
   infinityOvertravelMm?: number;
   closeFocusExtraMarginMm?: number;
+  slotMechanicalClearanceMm?: number;
   targetMountThroatDiameterMm?: number;
   recommendedPrototypeTravelMm?: number;
+  recommendedSlotLengthMm?: number;
   prototypeStartMm?: number;
 };
 
@@ -130,6 +132,7 @@ function toFiniteOrUndefined(value: number | undefined): number | undefined {
 
 function getFocusTravelDerived(project: LensProject): {
   recommendedPrototypeTravelMm?: number;
+  recommendedSlotLengthMm?: number;
   prototypeStartMm?: number;
   targetMountThroatDiameterMm?: number;
 } {
@@ -139,10 +142,12 @@ function getFocusTravelDerived(project: LensProject): {
   }
 
   const directRecommended = toFiniteOrUndefined(focus.recommendedPrototypeTravelMm);
+  const directSlotLength = toFiniteOrUndefined(focus.recommendedSlotLengthMm);
   const directStart = toFiniteOrUndefined(focus.prototypeStartMm);
   if (directRecommended && directRecommended > 0) {
     return {
       recommendedPrototypeTravelMm: directRecommended,
+      recommendedSlotLengthMm: directSlotLength && directSlotLength > 0 ? directSlotLength : undefined,
       prototypeStartMm: directStart,
       targetMountThroatDiameterMm: toFiniteOrUndefined(focus.targetMountThroatDiameterMm)
     };
@@ -154,6 +159,7 @@ function getFocusTravelDerived(project: LensProject): {
   const targetFlange = toFiniteOrUndefined(focus.targetFlangeDistanceMm);
   const overtravel = Math.max(0, toFiniteOrUndefined(focus.infinityOvertravelMm) ?? 10);
   const closeMargin = Math.max(0, toFiniteOrUndefined(focus.closeFocusExtraMarginMm) ?? 5);
+  const slotMechanicalClearanceMm = Math.max(0, toFiniteOrUndefined(focus.slotMechanicalClearanceMm) ?? 2);
 
   if (
     donorInfinity === undefined ||
@@ -168,13 +174,14 @@ function getFocusTravelDerived(project: LensProject): {
 
   const targetOffset = targetFlange - originalFlange;
   const targetPositionInfinity = donorInfinity - targetOffset;
-  const targetPositionClose = donorClose - targetOffset;
   const prototypeStart = targetPositionInfinity - overtravel;
-  const prototypeEnd = targetPositionClose + closeMargin;
-  const recommendedTravel = prototypeEnd - prototypeStart;
+  const actualFocusTravel = Math.abs(donorInfinity - donorClose);
+  const recommendedTravel = actualFocusTravel + overtravel + closeMargin;
 
   return {
     recommendedPrototypeTravelMm: recommendedTravel > 0 ? recommendedTravel : undefined,
+    recommendedSlotLengthMm:
+      recommendedTravel > 0 ? Number((recommendedTravel + slotMechanicalClearanceMm).toFixed(3)) : undefined,
     prototypeStartMm: prototypeStart,
     targetMountThroatDiameterMm: toFiniteOrUndefined(focus.targetMountThroatDiameterMm)
   };
@@ -599,12 +606,15 @@ function deriveCascadeSizing({
   });
 
   const slotLengthSource: SlotLengthSource =
-    focusDerived.recommendedPrototypeTravelMm && focusDerived.recommendedPrototypeTravelMm > 0
+    (focusDerived.recommendedSlotLengthMm && focusDerived.recommendedSlotLengthMm > 0) ||
+    (focusDerived.recommendedPrototypeTravelMm && focusDerived.recommendedPrototypeTravelMm > 0)
       ? "focus_travel"
       : "manual_default";
   const slotLengthMm = Number(
     (
-      focusDerived.recommendedPrototypeTravelMm && focusDerived.recommendedPrototypeTravelMm > 0
+      focusDerived.recommendedSlotLengthMm && focusDerived.recommendedSlotLengthMm > 0
+        ? focusDerived.recommendedSlotLengthMm
+        : focusDerived.recommendedPrototypeTravelMm && focusDerived.recommendedPrototypeTravelMm > 0
         ? focusDerived.recommendedPrototypeTravelMm + 2.0
         : DEFAULT_SLOT_LENGTH_WITHOUT_FOCUS_TRAVEL_MM
     ).toFixed(3)

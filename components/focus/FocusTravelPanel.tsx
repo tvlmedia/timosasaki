@@ -9,9 +9,17 @@ import { WarningBox } from "@/components/common/WarningBox";
 import {
   calculateFocusTravel,
   getDefaultFlangeForMount,
-  normalizeFocusTravelSetup
+  getMountThroatPresetMm,
+  normalizeFocusTravelSetup,
+  resolveRearCarrierOuterDiameterForFocus
 } from "@/lib/focusTravel";
-import type { FocusTravelSetup, LensMountType, LensProject } from "@/types";
+import type {
+  FocusTravelSetup,
+  LensMountType,
+  LensProject,
+  RearCarrierOuterDiameterSource,
+  TargetMountThroatDiameterSource
+} from "@/types";
 
 const mountOptions: Array<{ value: LensMountType; label: string }> = [
   { value: "M42", label: "M42" },
@@ -63,35 +71,66 @@ function sectionCard(title: string, body: ReactNode) {
   );
 }
 
-function buildDesignSummary(setup: FocusTravelSetup): string {
+function getRearCarrierSourceLabel(source: RearCarrierOuterDiameterSource): string {
+  if (source === "auto_fit_system") return "Auto-fit System carrier_outer_diameter";
+  if (source === "sliding_carrier_part") return "Sliding optical carrier CAD part";
+  if (source === "manual") return "Manual override";
+  return "Unknown";
+}
+
+function getTargetMountThroatSourceLabel(source: TargetMountThroatDiameterSource): string {
+  if (source === "manual") return "Manual";
+  if (source === "mount_preset") return "Mount preset";
+  return "Unknown";
+}
+
+function buildDesignSummary({
+  setup,
+  rearCarrierOuterDiameterMm,
+  rearCarrierSourceLabel,
+  targetMountThroatDiameterMm,
+  clearanceMm
+}: {
+  setup: FocusTravelSetup;
+  rearCarrierOuterDiameterMm?: number;
+  rearCarrierSourceLabel: string;
+  targetMountThroatDiameterMm?: number;
+  clearanceMm?: number;
+}): string {
   const calc = calculateFocusTravel(setup);
   if (
+    typeof calc.actualFocusTravelMm !== "number" ||
     typeof calc.recommendedPrototypeTravelMm !== "number" ||
-    typeof calc.targetPositionInfinityMm !== "number" ||
-    typeof calc.targetPositionCloseFocusMm !== "number"
+    typeof setup.donorFlangeToReferenceInfinityMm !== "number" ||
+    typeof setup.donorFlangeToReferenceCloseFocusMm !== "number"
   ) {
     return "Fill infinity/close-focus donor measurements first to generate a Focus Travel design summary.";
   }
 
-  const rearCarrierLine =
-    typeof setup.targetMountThroatDiameterMm === "number" && setup.targetMountThroatDiameterMm > 0
-      ? `Keep rear carrier OD below about ${(setup.targetMountThroatDiameterMm - 1).toFixed(
-          2
-        )}mm (target throat - 1.0mm safety margin).`
-      : "Measure actual target mount throat diameter before finalizing rear carrier OD.";
-
-  return [
-    `Build the prototype optical carrier with at least ${f(calc.recommendedPrototypeTravelMm)}mm travel.`,
-    `Allow ${f(
-      setup.infinityOvertravelMm
-    )}mm extra movement toward the sensor beyond calculated infinity and ${f(
+  const parts = [
+    `Measured focus travel is ${f(calc.actualFocusTravelMm)}mm based on infinity ${f(
+      setup.donorFlangeToReferenceInfinityMm
+    )}mm and close focus ${f(setup.donorFlangeToReferenceCloseFocusMm)}mm.`,
+    `With ${f(setup.infinityOvertravelMm)}mm infinity overtravel and ${f(
       setup.closeFocusExtraMarginMm
-    )}mm extra movement toward the front beyond close focus.`,
-    `Calculated infinity position: ${signed(calc.targetPositionInfinityMm)}mm relative to target flange.`,
-    `Calculated close-focus position: ${signed(calc.targetPositionCloseFocusMm)}mm relative to target flange.`,
-    `Prototype range: ${signed(calc.prototypeStartMm ?? 0)}mm to ${signed(calc.prototypeEndMm ?? 0)}mm.`,
-    rearCarrierLine
-  ].join(" ");
+    )}mm close focus margin, recommended prototype travel is ${f(calc.recommendedPrototypeTravelMm)}mm${
+      typeof calc.recommendedSlotLengthMm === "number"
+        ? ` and recommended slot length is ${f(calc.recommendedSlotLengthMm)}mm`
+        : ""
+    }.`,
+    typeof rearCarrierOuterDiameterMm === "number"
+      ? `Rear carrier OD is ${f(rearCarrierOuterDiameterMm)}mm from ${rearCarrierSourceLabel}.`
+      : "Rear carrier OD is unavailable. Generate/update auto-fit sizing first or enable manual override.",
+    typeof targetMountThroatDiameterMm === "number"
+      ? `Target mount throat is ${f(targetMountThroatDiameterMm)}mm; rear carrier clearance is ${f(
+          clearanceMm ?? 0
+        )}mm.`
+      : "Measure actual PL throat diameter before finalizing rear carrier clearance."
+  ];
+  if (targetMountThroatDiameterMm !== undefined) {
+    parts.push("Measure actual PL throat diameter before finalizing rear carrier clearance.");
+  }
+  return parts.join(" ");
 }
 
 export function FocusTravelPanel({
@@ -102,8 +141,55 @@ export function FocusTravelPanel({
   onProjectChange: (project: LensProject) => void;
 }) {
   const setup = normalizeFocusTravelSetup(project.focusTravel);
-  const calc = useMemo(() => calculateFocusTravel(setup), [setup]);
   const [feedback, setFeedback] = useState<string>("");
+
+  const rearCarrierResolution = useMemo(
+    () => resolveRearCarrierOuterDiameterForFocus(project, setup),
+    [project, setup]
+  );
+  const resolvedRearCarrierOuterDiameterMm = rearCarrierResolution.valueMm;
+
+  const projectTargetMountThroatDiameterMm =
+    typeof setup.targetMountThroatDiameterMm === "number" && setup.targetMountThroatDiameterMm > 0
+      ? setup.targetMountThroatDiameterMm
+      : undefined;
+  const mountPresetThroatMm = getMountThroatPresetMm(setup.targetMount);
+  const resolvedTargetMountThroatDiameterMm =
+    projectTargetMountThroatDiameterMm ?? mountPresetThroatMm;
+  const resolvedTargetMountThroatSource: TargetMountThroatDiameterSource =
+    projectTargetMountThroatDiameterMm !== undefined
+      ? setup.targetMountThroatDiameterSource === "mount_preset" ||
+        setup.targetMountThroatDiameterSource === "manual"
+        ? setup.targetMountThroatDiameterSource
+        : "manual"
+      : mountPresetThroatMm !== undefined
+        ? "mount_preset"
+        : "unknown";
+
+  const effectiveSetup = useMemo(
+    () =>
+      normalizeFocusTravelSetup({
+        ...setup,
+        rearCarrierOuterDiameterMm: resolvedRearCarrierOuterDiameterMm,
+        rearCarrierOuterDiameterSource: rearCarrierResolution.source,
+        targetMountThroatDiameterMm: resolvedTargetMountThroatDiameterMm,
+        targetMountThroatDiameterSource: resolvedTargetMountThroatSource
+      }),
+    [
+      setup,
+      resolvedRearCarrierOuterDiameterMm,
+      rearCarrierResolution.source,
+      resolvedTargetMountThroatDiameterMm,
+      resolvedTargetMountThroatSource
+    ]
+  );
+  const calc = useMemo(() => calculateFocusTravel(effectiveSetup), [effectiveSetup]);
+
+  const rearCarrierToThroatClearanceMm =
+    typeof resolvedTargetMountThroatDiameterMm === "number" &&
+    typeof resolvedRearCarrierOuterDiameterMm === "number"
+      ? Number((resolvedTargetMountThroatDiameterMm - resolvedRearCarrierOuterDiameterMm).toFixed(3))
+      : undefined;
 
   const patchSetup = (patch: Partial<FocusTravelSetup>) => {
     const nextSetup = normalizeFocusTravelSetup({ ...setup, ...patch });
@@ -120,7 +206,13 @@ export function FocusTravelPanel({
         ? "The original flange reference is in front of the target flange, away from the sensor."
         : "Original and target flange distances match (no offset).";
 
-  const summaryText = buildDesignSummary(setup);
+  const summaryText = buildDesignSummary({
+    setup: effectiveSetup,
+    rearCarrierOuterDiameterMm: resolvedRearCarrierOuterDiameterMm,
+    rearCarrierSourceLabel: getRearCarrierSourceLabel(rearCarrierResolution.source),
+    targetMountThroatDiameterMm: resolvedTargetMountThroatDiameterMm,
+    clearanceMm: rearCarrierToThroatClearanceMm
+  });
 
   const diagramValues =
     typeof calc.prototypeStartMm === "number" &&
@@ -157,24 +249,79 @@ export function FocusTravelPanel({
   };
 
   const createMovingCarrierPreset = () => {
-    if (typeof calc.recommendedPrototypeTravelMm !== "number" || calc.recommendedPrototypeTravelMm <= 0) {
+    if (
+      typeof calc.actualFocusTravelMm !== "number" ||
+      typeof calc.recommendedPrototypeTravelMm !== "number" ||
+      calc.recommendedPrototypeTravelMm <= 0
+    ) {
       setFeedback("Enter valid donor measurements first to create a moving carrier preset.");
       return;
     }
 
-    patchSetup({
+    const nextFocusTravel = normalizeFocusTravelSetup({
+      ...setup,
+      actualFocusTravelMm: Number(calc.actualFocusTravelMm.toFixed(2)),
+      recommendedPrototypeTravelMm: Number(calc.recommendedPrototypeTravelMm.toFixed(2)),
+      recommendedSlotLengthMm:
+        typeof calc.recommendedSlotLengthMm === "number"
+          ? Number(calc.recommendedSlotLengthMm.toFixed(2))
+          : undefined,
       movingCarrierCadPreset: {
         travelMm: Number(calc.recommendedPrototypeTravelMm.toFixed(2)),
-        rearCarrierOuterDiameterMm: setup.rearCarrierOuterDiameterMm,
+        actualFocusTravelMm: Number(calc.actualFocusTravelMm.toFixed(2)),
+        recommendedSlotLengthMm:
+          typeof calc.recommendedSlotLengthMm === "number"
+            ? Number(calc.recommendedSlotLengthMm.toFixed(2))
+            : undefined,
+        slotMechanicalClearanceMm: Number((effectiveSetup.slotMechanicalClearanceMm ?? 0).toFixed(2)),
+        rearCarrierOuterDiameterMm: resolvedRearCarrierOuterDiameterMm,
+        rearCarrierOuterDiameterSource: rearCarrierResolution.source,
         sourceSummary: summaryText,
         createdAt: new Date().toISOString()
+      }
+    });
+    onProjectChange({
+      ...project,
+      focusTravel: nextFocusTravel,
+      cadDefaults: {
+        ...project.cadDefaults,
+        plSlotLengthManualMm:
+          typeof calc.recommendedSlotLengthMm === "number"
+            ? Number(calc.recommendedSlotLengthMm.toFixed(2))
+            : project.cadDefaults.plSlotLengthManualMm
       }
     });
     setFeedback("Moving carrier CAD preset saved.");
   };
 
-  const combinedWarnings = [
+  const clearanceWarnings = (() => {
+    const warnings: string[] = [];
+    if (resolvedTargetMountThroatDiameterMm === undefined) {
+      warnings.push("Measure actual PL throat diameter before finalizing rear carrier size.");
+    } else if (
+      resolvedTargetMountThroatSource === "mount_preset" &&
+      projectTargetMountThroatDiameterMm === undefined
+    ) {
+      warnings.push("Mount throat value is currently a preset. Measure your actual PL throat opening before finalizing.");
+    }
+    if (resolvedRearCarrierOuterDiameterMm === undefined) {
+      warnings.push("Rear carrier OD unavailable. Generate/update auto-fit sizing first or enter manual override.");
+    }
+    if (typeof rearCarrierToThroatClearanceMm === "number") {
+      if (rearCarrierToThroatClearanceMm < 0) {
+        warnings.push("Rear carrier is larger than the PL throat and will collide.");
+      } else if (rearCarrierToThroatClearanceMm < 1.0) {
+        warnings.push("Rear carrier clearance is very tight. Increase clearance or reduce rear carrier OD.");
+      } else if (rearCarrierToThroatClearanceMm < 2.0) {
+        warnings.push("Rear carrier clearance is small. Check print tolerances and PL mount geometry.");
+      }
+    }
+    return warnings;
+  })();
+
+  const combinedWarnings = Array.from(new Set([
     ...calc.warnings,
+    ...clearanceWarnings,
     ...(
       setup.originalFlangeDistanceMm <= 0 ||
       setup.targetFlangeDistanceMm <= 0
@@ -186,7 +333,18 @@ export function FocusTravelPanel({
         ? ["Infinity overtravel and close focus margin must be >= 0."]
         : []
     )
-  ];
+  ]));
+
+  const clearanceStatusLine =
+    typeof rearCarrierToThroatClearanceMm !== "number"
+      ? "Clearance cannot be calculated until target mount throat diameter is known."
+      : rearCarrierToThroatClearanceMm < 0
+        ? "Rear carrier is larger than the PL throat and will collide."
+        : rearCarrierToThroatClearanceMm < 1.0
+          ? "Rear carrier clearance is very tight. Increase clearance or reduce rear carrier OD."
+          : rearCarrierToThroatClearanceMm < 2.0
+            ? "Rear carrier clearance is small. Check print tolerances and PL mount geometry."
+            : "Rear carrier clears PL throat.";
 
   return (
     <div className="space-y-4">
@@ -234,9 +392,17 @@ export function FocusTravelPanel({
               value={setup.targetMount}
               onChange={(event) => {
                 const mount = event.target.value as LensMountType;
+                const preset = getMountThroatPresetMm(mount);
+                const preserveManual = setup.targetMountThroatDiameterSource === "manual";
                 patchSetup({
                   targetMount: mount,
-                  targetFlangeDistanceMm: getDefaultFlangeForMount(mount) ?? setup.targetFlangeDistanceMm
+                  targetFlangeDistanceMm: getDefaultFlangeForMount(mount) ?? setup.targetFlangeDistanceMm,
+                  ...(preserveManual
+                    ? {}
+                    : {
+                        targetMountThroatDiameterMm: preset,
+                        targetMountThroatDiameterSource: preset ? "mount_preset" : "unknown"
+                      })
                 });
               }}
             >
@@ -316,7 +482,7 @@ export function FocusTravelPanel({
       {sectionCard(
         "Prototype Travel Margins",
         <>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-3">
             <NumberInput
               label="Infinity overtravel (mm)"
               value={setup.infinityOvertravelMm}
@@ -334,6 +500,17 @@ export function FocusTravelPanel({
               onChange={(event) =>
                 patchSetup({
                   closeFocusExtraMarginMm: Math.max(0, Number(event.target.value || 0))
+                })
+              }
+              step="0.1"
+              min="0"
+            />
+            <NumberInput
+              label="Slot mechanical clearance (mm)"
+              value={setup.slotMechanicalClearanceMm ?? 0}
+              onChange={(event) =>
+                patchSetup({
+                  slotMechanicalClearanceMm: Math.max(0, Number(event.target.value || 0))
                 })
               }
               step="0.1"
@@ -373,19 +550,30 @@ export function FocusTravelPanel({
                 label="Reference @ close focus relative to target flange"
                 value={`${signed(calc.targetPositionCloseFocusMm)} mm`}
               />
-              <SummaryRow label="Actual focus travel" value={`${f(calc.actualFocusTravelMm)} mm`} />
-              <SummaryRow label="Prototype carrier start" value={`${signed(calc.prototypeStartMm)} mm`} />
-              <SummaryRow label="Prototype carrier end" value={`${signed(calc.prototypeEndMm)} mm`} />
+              <SummaryRow label="Actual focus travel (|infinity - close|)" value={`${f(calc.actualFocusTravelMm)} mm`} />
+              <SummaryRow label="Infinity overtravel" value={`${f(setup.infinityOvertravelMm)} mm`} />
+              <SummaryRow label="Close focus extra margin" value={`${f(setup.closeFocusExtraMarginMm)} mm`} />
               <SummaryRow
                 label="Total recommended prototype travel"
                 value={`${f(calc.recommendedPrototypeTravelMm)} mm`}
               />
+              <SummaryRow
+                label="Recommended slot length"
+                value={
+                  typeof calc.recommendedSlotLengthMm === "number"
+                    ? `${f(calc.recommendedSlotLengthMm)} mm`
+                    : "N/A"
+                }
+              />
+              <SummaryRow label="Prototype carrier start" value={`${signed(calc.prototypeStartMm)} mm`} />
+              <SummaryRow label="Prototype carrier end" value={`${signed(calc.prototypeEndMm)} mm`} />
             </div>
           ) : (
             <p className="text-sm text-labMuted">
               Enter donor infinity + close focus measurements to calculate target positions and recommended travel.
             </p>
           )}
+          {calc.directionHint && <p className="text-sm text-labMuted">{calc.directionHint}</p>}
         </>
       )}
 
@@ -395,27 +583,100 @@ export function FocusTravelPanel({
           <div className="grid gap-3 md:grid-cols-2">
             <NumberInput
               label="Target mount throat diameter (mm)"
-              value={setup.targetMountThroatDiameterMm ?? ""}
-              onChange={(event) =>
+              value={projectTargetMountThroatDiameterMm ?? ""}
+              placeholder={mountPresetThroatMm ? `${f(mountPresetThroatMm)} (preset)` : ""}
+              onChange={(event) => {
+                const next = parsePositiveOptional(event.target.value);
                 patchSetup({
-                  targetMountThroatDiameterMm: parsePositiveOptional(event.target.value)
-                })
-              }
+                  targetMountThroatDiameterMm: next,
+                  targetMountThroatDiameterSource: next ? "manual" : "unknown"
+                });
+              }}
               step="0.01"
               min="0"
             />
             <NumberInput
               label="Rear carrier outer diameter (mm)"
-              value={setup.rearCarrierOuterDiameterMm ?? ""}
+              value={
+                setup.rearCarrierOuterDiameterManualOverride
+                  ? setup.rearCarrierOuterDiameterMm ?? ""
+                  : resolvedRearCarrierOuterDiameterMm ?? ""
+              }
               onChange={(event) =>
                 patchSetup({
-                  rearCarrierOuterDiameterMm: parsePositiveOptional(event.target.value)
+                  rearCarrierOuterDiameterMm: parsePositiveOptional(event.target.value),
+                  rearCarrierOuterDiameterSource: "manual"
                 })
               }
               step="0.01"
               min="0"
+              disabled={!setup.rearCarrierOuterDiameterManualOverride}
             />
           </div>
+          <div className="flex flex-wrap items-center gap-4 text-sm text-labMuted">
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={setup.rearCarrierOuterDiameterManualOverride ?? false}
+                onChange={(event) => {
+                  const enabled = event.target.checked;
+                  patchSetup({
+                    rearCarrierOuterDiameterManualOverride: enabled,
+                    rearCarrierOuterDiameterMm:
+                      enabled
+                        ? setup.rearCarrierOuterDiameterMm ?? resolvedRearCarrierOuterDiameterMm
+                        : setup.rearCarrierOuterDiameterMm,
+                    rearCarrierOuterDiameterSource: enabled ? "manual" : rearCarrierResolution.source
+                  });
+                }}
+              />
+              <span>Override rear carrier OD manually</span>
+            </label>
+          </div>
+
+          <div className="rounded-xl border border-labBorder bg-[#0a0a0a] p-3 text-sm text-labMuted">
+            <p>
+              Rear carrier outer diameter:{" "}
+              <span className="mono">
+                {typeof resolvedRearCarrierOuterDiameterMm === "number"
+                  ? `${f(resolvedRearCarrierOuterDiameterMm)} mm`
+                  : "N/A"}
+              </span>
+            </p>
+            <p>
+              Source:{" "}
+              <span className="mono">
+                {getRearCarrierSourceLabel(
+                  setup.rearCarrierOuterDiameterManualOverride ? "manual" : rearCarrierResolution.source
+                )}
+              </span>
+            </p>
+            <p className="mt-2">
+              Target mount throat:{" "}
+              <span className="mono">
+                {typeof resolvedTargetMountThroatDiameterMm === "number"
+                  ? `${f(resolvedTargetMountThroatDiameterMm)} mm`
+                  : "N/A"}
+              </span>
+            </p>
+            <p>
+              Source: <span className="mono">{getTargetMountThroatSourceLabel(resolvedTargetMountThroatSource)}</span>
+            </p>
+            <p className="mt-2">
+              Clearance:{" "}
+              <span className="mono">
+                {typeof rearCarrierToThroatClearanceMm === "number"
+                  ? `${f(rearCarrierToThroatClearanceMm)} mm`
+                  : "Clearance cannot be calculated until target mount throat diameter is known."}
+              </span>
+            </p>
+            <p className="mt-1">{clearanceStatusLine}</p>
+            <p className="mt-2 text-xs">
+              Measure the smallest clear opening of your actual PL mount/reference before finalizing the rear carrier
+              size.
+            </p>
+          </div>
+
           {typeof calc.recommendedMaxRearCarrierODMm === "number" && (
             <p className="text-sm text-labMuted">
               Recommended max rear carrier OD: {f(calc.recommendedMaxRearCarrierODMm)} mm
@@ -463,8 +724,8 @@ export function FocusTravelPanel({
                   <div
                     className="absolute top-[54%] h-3 -translate-y-1/2 rounded bg-labAccent/30"
                     style={{
-                      left: `calc(12px + (100% - 24px) * ${toPct(calc.prototypeStartMm) / 100})`,
-                      width: `calc((100% - 24px) * ${(toPct(calc.prototypeEndMm) - toPct(calc.prototypeStartMm)) / 100})`
+                      left: `calc(12px + (100% - 24px) * ${Math.min(toPct(calc.prototypeStartMm), toPct(calc.prototypeEndMm)) / 100})`,
+                      width: `calc((100% - 24px) * ${Math.abs(toPct(calc.prototypeEndMm) - toPct(calc.prototypeStartMm)) / 100})`
                     }}
                   />
                   <div
