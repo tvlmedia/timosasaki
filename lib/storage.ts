@@ -10,6 +10,7 @@ import type {
   MeasurementsState,
   OriginalLensBaseline
 } from "@/types";
+import type { PhysicalSpacerThicknessSource } from "@/types/measurement";
 
 const STORAGE_KEY = "sasaki-lens-lab-projects-v1";
 const SETTINGS_KEY = "sasaki-lens-lab-settings-v1";
@@ -58,6 +59,11 @@ function sumInsertedItemsThickness(
     const thickness = toPositive(item.thicknessMm);
     return thickness > 0 ? sum + thickness : sum;
   }, 0);
+}
+
+function normalizePhysicalSpacerThicknessSource(value: unknown): PhysicalSpacerThicknessSource {
+  if (value === "calculated_from_cup_offsets" || value === "manual_override") return value;
+  return "same_as_airspace";
 }
 
 function buildSteppedSegmentsFromMeasurementFields(fields: {
@@ -178,11 +184,9 @@ export function normalizeProject(project: LensProject): LensProject {
               : toPositive(base.thicknessMm) > 0
                 ? base.thicknessMm
                 : desiredOpticalAirGapMm;
-          const physicalSpacerThicknessSource =
-            base.physicalSpacerThicknessSource === "calculated_from_cup_offsets" ||
-            base.physicalSpacerThicknessSource === "manual_override"
-              ? base.physicalSpacerThicknessSource
-              : "same_as_airspace";
+          const physicalSpacerThicknessSource = normalizePhysicalSpacerThicknessSource(
+            base.physicalSpacerThicknessSource
+          );
           const insertedItems = base.insertedItems ?? [];
           const insertedItemsTotalThicknessMm =
             toPositive(base.insertedItemsTotalThicknessMm) > 0
@@ -412,11 +416,9 @@ function normalizeMeasurements(
                     : toPositive(annotation.fields?.thicknessMm) > 0
                       ? annotation.fields?.thicknessMm
                       : 1,
-                physicalSpacerThicknessSource:
-                  annotation.fields?.physicalSpacerThicknessSource === "calculated_from_cup_offsets" ||
-                  annotation.fields?.physicalSpacerThicknessSource === "manual_override"
-                    ? annotation.fields?.physicalSpacerThicknessSource
-                    : "same_as_airspace",
+                physicalSpacerThicknessSource: normalizePhysicalSpacerThicknessSource(
+                  annotation.fields?.physicalSpacerThicknessSource
+                ),
                 airspaceMeasurementType: annotation.fields?.airspaceMeasurementType ?? "unknown",
                 airspaceConfidence: annotation.fields?.airspaceConfidence ?? "unknown",
                 insertedItems: annotation.fields?.insertedItems ?? []
