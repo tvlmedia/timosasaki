@@ -447,7 +447,7 @@ export function ThreeAssemblyPreview({
       const outerGeometry = new THREE.CylinderGeometry(outerRadiusMm, outerRadiusMm, lengthMm, 56, 1, false);
       const outerMaterial = new THREE.MeshStandardMaterial({
         color: style.color,
-        transparent: params.transparentOverride ?? opacity < 0.999 || isShell,
+        transparent: params.transparentOverride ?? (opacity < 0.999 || isShell),
         opacity,
         metalness: style.metalness,
         roughness: style.roughness,
