@@ -117,6 +117,11 @@ const orientationOptions: Array<{ value: ElementOrientation; label: string }> = 
   { value: "unknown", label: "Unknown" }
 ];
 
+const PHOTO_UPLOAD_RESIZE_THRESHOLD_BYTES = 1_500_000;
+const PHOTO_UPLOAD_MAX_EDGE_PX = 2200;
+const PHOTO_UPLOAD_JPEG_QUALITY_STEPS = [0.86, 0.78, 0.7];
+const PHOTO_UPLOAD_TARGET_DATA_URL_LENGTH = 2_400_000;
+
 const stepDirectionOptions: Array<{ value: StepDirection; label: string }> = [
   { value: "large_side_front", label: "Large side faces front" },
   { value: "large_side_rear", label: "Large side faces rear" },
@@ -146,6 +151,86 @@ const boxHandleDefs: Array<{
   { handle: "sw", tx: 0, ty: 1, cursor: "nesw-resize" },
   { handle: "w", tx: 0, ty: 0.5, cursor: "ew-resize" }
 ];
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("Failed to read image file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Failed to decode image file."));
+    image.src = dataUrl;
+  });
+}
+
+async function getStorageFriendlyPhotoDataUrl(file: File): Promise<string> {
+  const originalDataUrl = await readFileAsDataUrl(file);
+  const isImageFile = file.type.startsWith("image/");
+  const shouldResize =
+    file.size > PHOTO_UPLOAD_RESIZE_THRESHOLD_BYTES ||
+    originalDataUrl.length > PHOTO_UPLOAD_TARGET_DATA_URL_LENGTH;
+
+  if (!isImageFile || !shouldResize || file.type === "image/gif") {
+    return originalDataUrl;
+  }
+
+  try {
+    const image = await loadImageFromDataUrl(originalDataUrl);
+    const maxEdge = Math.max(image.naturalWidth, image.naturalHeight);
+    const scale = maxEdge > PHOTO_UPLOAD_MAX_EDGE_PX ? PHOTO_UPLOAD_MAX_EDGE_PX / maxEdge : 1;
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return originalDataUrl;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, width, height);
+
+    let best = originalDataUrl;
+    for (const quality of PHOTO_UPLOAD_JPEG_QUALITY_STEPS) {
+      const candidate = canvas.toDataURL("image/jpeg", quality);
+      if (candidate.length < best.length) {
+        best = candidate;
+      }
+      if (candidate.length <= PHOTO_UPLOAD_TARGET_DATA_URL_LENGTH) {
+        return candidate;
+      }
+    }
+    return best;
+  } catch {
+    return originalDataUrl;
+  }
+}
+
+function isQuotaExceededError(error: unknown): boolean {
+  if (!(error instanceof DOMException)) return false;
+  return (
+    error.name === "QuotaExceededError" ||
+    error.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+    error.code === 22 ||
+    error.code === 1014
+  );
+}
+
+function getPhotoUploadErrorMessage(error: unknown): string {
+  if (isQuotaExceededError(error)) {
+    return "Upload failed: browser storage is full. Delete old projects/photos or use a smaller image.";
+  }
+  if (error instanceof Error && error.message) {
+    return `Upload failed: ${error.message}`;
+  }
+  return "Upload failed. Try a smaller image or reload the page.";
+}
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -948,6 +1033,7 @@ export function MeasurementsBoard({
   const [calibrationDraftGeometry, setCalibrationDraftGeometry] = useState<CalibrationReferenceGeometry | null>(null);
   const [calibrationError, setCalibrationError] = useState("");
   const [syncError, setSyncError] = useState("");
+  const [photoUploadError, setPhotoUploadError] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardInitialBaseline, setWizardInitialBaseline] = useState<OriginalLensBaseline | undefined>(
     project.originalLensBaseline
@@ -1380,19 +1466,18 @@ export function MeasurementsBoard({
 
   const handleUploadPhoto = async (file?: File) => {
     if (!file) return;
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result ?? ""));
-      reader.onerror = () => reject(new Error("Failed to read image file."));
-      reader.readAsDataURL(file);
-    });
-
-    patchMeasurements((current) => ({
-      ...current,
-      photoDataUrl: dataUrl,
-      photoName: file.name,
-      photoUpdatedAt: new Date().toISOString()
-    }));
+    try {
+      setPhotoUploadError("");
+      const dataUrl = await getStorageFriendlyPhotoDataUrl(file);
+      patchMeasurements((current) => ({
+        ...current,
+        photoDataUrl: dataUrl,
+        photoName: file.name,
+        photoUpdatedAt: new Date().toISOString()
+      }));
+    } catch (error) {
+      setPhotoUploadError(getPhotoUploadErrorMessage(error));
+    }
   };
 
   const saveCalibration = () => {
@@ -1676,6 +1761,7 @@ export function MeasurementsBoard({
               <Button onClick={() => fileInputRef.current?.click()}>Upload Photo</Button>
               {measurements.photoName && <span className="text-xs text-labMuted">{measurements.photoName}</span>}
             </div>
+            {photoUploadError && <p className="mt-2 text-sm text-labDanger">{photoUploadError}</p>}
             <input
               ref={fileInputRef}
               type="file"
