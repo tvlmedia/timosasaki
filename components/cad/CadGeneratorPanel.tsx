@@ -40,6 +40,7 @@ const needsSource: Record<CadPartType, StackItem["type"] | null> = {
   retaining_ring: "retaining_ring",
   fixed_pl_barrel_with_slots: null,
   sliding_optical_carrier: "glass",
+  guide_pin: null,
   main_barrel: "barrel",
   moving_carrier: "barrel",
   cam_sleeve: "barrel"
@@ -77,6 +78,24 @@ type SlidingCarrierLengthSource = "manual" | "lens_cup_or_stack";
 type SlidingCarrierOverrides = {
   lengthSource: SlidingCarrierLengthSource;
   manualLengthMm: number;
+};
+
+type GuidePinOverrides = {
+  pinShaftDiameterMm?: number;
+  pinShaftLengthMm?: number;
+  pinHeadDiameterMm?: number;
+  pinHeadThicknessMm?: number;
+  tipChamferMm?: number;
+  quantity?: number;
+};
+
+type GuidePinResolved = {
+  pinShaftDiameterMm: number;
+  pinShaftLengthMm: number;
+  pinHeadDiameterMm: number;
+  pinHeadThicknessMm: number;
+  tipChamferMm: number;
+  quantity: number;
 };
 
 type CarrierLengthDerivedSource = "manual" | "optical_stack_length";
@@ -128,6 +147,11 @@ const DEFAULT_BARREL_END_MARGIN_MM = 6.0;
 const DEFAULT_MINIMUM_CUP_WALL_THICKNESS_MM = 2.0;
 const DEFAULT_SHARED_STACK_ROUNDING_INCREMENT_MM = 0.5;
 const DEFAULT_SLOT_LENGTH_WITHOUT_FOCUS_TRAVEL_MM = 32.0;
+const DEFAULT_GUIDE_PIN_SHAFT_LENGTH_MM = 8.0;
+const DEFAULT_GUIDE_PIN_HEAD_DIAMETER_MM = 5.5;
+const DEFAULT_GUIDE_PIN_HEAD_THICKNESS_MM = 1.8;
+const DEFAULT_GUIDE_PIN_TIP_CHAMFER_MM = 0.2;
+const DEFAULT_GUIDE_PIN_QUANTITY = 2;
 
 function roundUpToIncrement(value: number, increment: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
@@ -193,6 +217,44 @@ function getFocusTravelDerived(project: LensProject): {
       recommendedTravel > 0 ? Number((recommendedTravel + slotMechanicalClearanceMm).toFixed(3)) : undefined,
     prototypeStartMm: prototypeStart,
     targetMountThroatDiameterMm: toFiniteOrUndefined(focus.targetMountThroatDiameterMm)
+  };
+}
+
+function deriveGuidePinSizing(defaults: CadDefaults, cascade: CascadeSizing): {
+  slotWidthMm: number;
+  carrierPinHoleDiameterMm: number;
+  autoPinShaftDiameterMm: number;
+  fixedBarrelWallThicknessMm: number;
+  carrierWallThicknessMm: number;
+  minimumRecommendedShaftLengthMm: number;
+} {
+  const basePinDiameterMm = Math.max(1.0, defaults.plPinDiameterMm ?? defaults.camPinDiameterMm ?? 2.0);
+  const basePinClearanceMm = Math.max(0.1, defaults.plPinClearanceMm ?? 0.3);
+  const slotWidthMm = Number((basePinDiameterMm + basePinClearanceMm).toFixed(3));
+  const carrierPinHoleDiameterMm = Number((basePinDiameterMm + basePinClearanceMm).toFixed(3));
+  const autoPinShaftDiameterMm = Number(
+    Math.max(0.6, Math.min(slotWidthMm, carrierPinHoleDiameterMm) - 0.2).toFixed(3)
+  );
+
+  const fixedBarrelWallThicknessRawMm =
+    (toPositive(cascade.fixedBarrelOuterDiameterMm) - toPositive(cascade.fixedBarrelInnerDiameterMm)) / 2;
+  const fixedBarrelWallThicknessMm = Number(Math.max(0, fixedBarrelWallThicknessRawMm).toFixed(3));
+
+  const carrierWallThicknessRawMm =
+    (toPositive(cascade.carrierOuterDiameterMm) - toPositive(cascade.carrierInnerDiameterMm)) / 2;
+  const carrierWallThicknessMm = Number(Math.max(0, carrierWallThicknessRawMm).toFixed(3));
+
+  const minimumRecommendedShaftLengthMm = Number(
+    (fixedBarrelWallThicknessMm + carrierWallThicknessMm + 0.6).toFixed(3)
+  );
+
+  return {
+    slotWidthMm,
+    carrierPinHoleDiameterMm,
+    autoPinShaftDiameterMm,
+    fixedBarrelWallThicknessMm,
+    carrierWallThicknessMm,
+    minimumRecommendedShaftLengthMm
   };
 }
 
@@ -720,7 +782,8 @@ function createPayload(
   source?: StackItem,
   fixedPlOverrides?: { barrelAttachZMm: number; plOverlapMm: number },
   slidingCarrierOverrides?: SlidingCarrierOverrides,
-  cascadeSizing?: CascadeSizing
+  cascadeSizing?: CascadeSizing,
+  guidePinOverrides?: GuidePinOverrides
 ): ScadPayload {
   const defaults = project.cadDefaults;
   const sourceName = source?.name ?? "part";
@@ -745,6 +808,7 @@ function createPayload(
       focusDerived,
       slidingCarrierOverrides
     });
+  const guidePinSizing = deriveGuidePinSizing(defaults, cascade);
 
   switch (partType) {
     case "element_cup": {
@@ -1144,6 +1208,51 @@ function createPayload(
         }
       };
     }
+    case "guide_pin": {
+      const resolvedShaftDiameterMm = Number(
+        Math.max(0.5, guidePinOverrides?.pinShaftDiameterMm ?? guidePinSizing.autoPinShaftDiameterMm).toFixed(3)
+      );
+      const minimumShaftLengthMm = Math.max(
+        DEFAULT_GUIDE_PIN_SHAFT_LENGTH_MM,
+        guidePinSizing.minimumRecommendedShaftLengthMm
+      );
+      const resolvedShaftLengthMm = Number(
+        Math.max(1.0, guidePinOverrides?.pinShaftLengthMm ?? minimumShaftLengthMm).toFixed(3)
+      );
+      const resolvedHeadDiameterMm = Number(
+        Math.max(
+          resolvedShaftDiameterMm + 0.8,
+          guidePinOverrides?.pinHeadDiameterMm ?? DEFAULT_GUIDE_PIN_HEAD_DIAMETER_MM
+        ).toFixed(3)
+      );
+      const resolvedHeadThicknessMm = Number(
+        Math.max(0.4, guidePinOverrides?.pinHeadThicknessMm ?? DEFAULT_GUIDE_PIN_HEAD_THICKNESS_MM).toFixed(3)
+      );
+      const resolvedTipChamferMm = Number(
+        Math.max(0, guidePinOverrides?.tipChamferMm ?? DEFAULT_GUIDE_PIN_TIP_CHAMFER_MM).toFixed(3)
+      );
+      const resolvedQuantity = Math.max(
+        1,
+        Math.round(guidePinOverrides?.quantity ?? DEFAULT_GUIDE_PIN_QUANTITY)
+      );
+      return {
+        type: "guide_pin",
+        params: {
+          partName,
+          pinShaftDiameterMm: resolvedShaftDiameterMm,
+          pinShaftLengthMm: resolvedShaftLengthMm,
+          pinHeadDiameterMm: resolvedHeadDiameterMm,
+          pinHeadThicknessMm: resolvedHeadThicknessMm,
+          tipChamferMm: resolvedTipChamferMm,
+          quantity: resolvedQuantity,
+          slotWidthMm: guidePinSizing.slotWidthMm,
+          carrierPinHoleDiameterMm: guidePinSizing.carrierPinHoleDiameterMm,
+          fixedBarrelWallThicknessMm: guidePinSizing.fixedBarrelWallThicknessMm,
+          carrierWallThicknessMm: guidePinSizing.carrierWallThicknessMm,
+          facets: defaults.facets
+        }
+      };
+    }
     case "main_barrel": {
       const barrel = source?.type === "barrel" ? source : undefined;
       const inner = barrel?.innerDiameterMm ?? getRecommendedBarrelInnerDiameter(project.stackItems, defaults);
@@ -1362,6 +1471,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const [fixedPlOverlapMm, setFixedPlOverlapMm] = useState<number>(
     Math.max(2.0, project.cadDefaults.plReferenceOverlapMm ?? 2.0)
   );
+  const [guidePinOverrides, setGuidePinOverrides] = useState<GuidePinOverrides>({});
   const plAssemblyIncludeMain = project.cadDefaults.plAssemblyIncludeMainBarrelSection ?? true;
   const plAssemblyIncludeCarrier = project.cadDefaults.plAssemblyIncludeMovingCarrier ?? true;
   const plAssemblyIncludePins = project.cadDefaults.plAssemblyIncludeGuidePins ?? true;
@@ -1392,6 +1502,12 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
 
   const selectedSourceCandidate = sourceCandidates.find((candidate) => candidate.id === sourceItemId);
   const sourceItem = selectedSourceCandidate?.sourceItem;
+  const setGuidePinOverride = <K extends keyof GuidePinOverrides>(key: K, value: GuidePinOverrides[K]) => {
+    setGuidePinOverrides((current) => ({
+      ...current,
+      [key]: value
+    }));
+  };
   const slidingCarrierOverrides: SlidingCarrierOverrides = {
     lengthSource: slidingCarrierLengthSource,
     manualLengthMm: slidingCarrierManualLengthMm
@@ -1402,6 +1518,32 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     focusDerived,
     slidingCarrierOverrides
   });
+  const guidePinSizing = deriveGuidePinSizing(project.cadDefaults, cascadeSizing);
+  const guidePinResolved: GuidePinResolved = {
+    pinShaftDiameterMm: Number(
+      Math.max(0.5, guidePinOverrides.pinShaftDiameterMm ?? guidePinSizing.autoPinShaftDiameterMm).toFixed(3)
+    ),
+    pinShaftLengthMm: Number(
+      Math.max(
+        1.0,
+        guidePinOverrides.pinShaftLengthMm ??
+          Math.max(DEFAULT_GUIDE_PIN_SHAFT_LENGTH_MM, guidePinSizing.minimumRecommendedShaftLengthMm)
+      ).toFixed(3)
+    ),
+    pinHeadDiameterMm: Number(
+      Math.max(
+        (guidePinOverrides.pinShaftDiameterMm ?? guidePinSizing.autoPinShaftDiameterMm) + 0.8,
+        guidePinOverrides.pinHeadDiameterMm ?? DEFAULT_GUIDE_PIN_HEAD_DIAMETER_MM
+      ).toFixed(3)
+    ),
+    pinHeadThicknessMm: Number(
+      Math.max(0.4, guidePinOverrides.pinHeadThicknessMm ?? DEFAULT_GUIDE_PIN_HEAD_THICKNESS_MM).toFixed(3)
+    ),
+    tipChamferMm: Number(
+      Math.max(0, guidePinOverrides.tipChamferMm ?? DEFAULT_GUIDE_PIN_TIP_CHAMFER_MM).toFixed(3)
+    ),
+    quantity: Math.max(1, Math.round(guidePinOverrides.quantity ?? DEFAULT_GUIDE_PIN_QUANTITY))
+  };
   const fixedPlOverrides =
     partType === "fixed_pl_barrel_with_slots"
       ? {
@@ -1415,7 +1557,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     sourceItem,
     fixedPlOverrides,
     slidingCarrierOverrides,
-    cascadeSizing
+    cascadeSizing,
+    guidePinOverrides
   );
   const slidingCarrierPayloadForAssembly = createPayload(
     project,
@@ -1548,6 +1691,26 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       if (retainingLipInnerDiameterMm < vignettingThresholdMm) {
         warnings.push("Retaining lip may vignette the optical path.");
       }
+    }
+    return warnings;
+  })();
+  const guidePinValidationWarnings = (() => {
+    if (payload.type !== "guide_pin") return [] as string[];
+    const warnings: string[] = [];
+    const slotWidthMm = toPositive(payload.params.slotWidthMm);
+    const carrierPinHoleDiameterMm = toPositive(payload.params.carrierPinHoleDiameterMm);
+    const fixedBarrelWallThicknessMm = toPositive(payload.params.fixedBarrelWallThicknessMm);
+    const carrierWallThicknessMm = toPositive(payload.params.carrierWallThicknessMm);
+    const requiredEngagementLengthMm = fixedBarrelWallThicknessMm + carrierWallThicknessMm;
+
+    if (slotWidthMm > 0 && payload.params.pinShaftDiameterMm >= slotWidthMm) {
+      warnings.push("Pin is too thick for fixed barrel slot.");
+    }
+    if (carrierPinHoleDiameterMm > 0 && payload.params.pinShaftDiameterMm >= carrierPinHoleDiameterMm) {
+      warnings.push("Pin is too thick for carrier pin hole.");
+    }
+    if (requiredEngagementLengthMm > 0 && payload.params.pinShaftLengthMm < requiredEngagementLengthMm) {
+      warnings.push("Pin may be too short to engage the carrier.");
     }
     return warnings;
   })();
@@ -1769,7 +1932,8 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     ...autoFitSystemWarnings,
     ...elementCupValidationWarnings,
     ...spacerValidationWarnings,
-    ...slidingCarrierValidationWarnings
+    ...slidingCarrierValidationWarnings,
+    ...guidePinValidationWarnings
   ])];
   const autoFitSystemSpecs = useMemo(() => {
     return {
@@ -1998,13 +2162,37 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
       return values;
     }
 
+    if (payload.type === "guide_pin") {
+      values.pin_shaft_diameter = `${pretty(payload.params.pinShaftDiameterMm)} mm`;
+      values.pin_shaft_length = `${pretty(payload.params.pinShaftLengthMm)} mm`;
+      values.pin_head_diameter = `${pretty(payload.params.pinHeadDiameterMm)} mm`;
+      values.pin_head_thickness = `${pretty(payload.params.pinHeadThicknessMm)} mm`;
+      values.optional_tip_chamfer = `${pretty(payload.params.tipChamferMm ?? 0)} mm`;
+      values.quantity = payload.params.quantity;
+      values.slot_width_reference = `${pretty(payload.params.slotWidthMm ?? guidePinSizing.slotWidthMm)} mm`;
+      values.carrier_pin_hole_reference = `${pretty(
+        payload.params.carrierPinHoleDiameterMm ?? guidePinSizing.carrierPinHoleDiameterMm
+      )} mm`;
+      values.fixed_barrel_wall_reference = `${pretty(
+        payload.params.fixedBarrelWallThicknessMm ?? guidePinSizing.fixedBarrelWallThicknessMm
+      )} mm`;
+      values.carrier_wall_reference = `${pretty(
+        payload.params.carrierWallThicknessMm ?? guidePinSizing.carrierWallThicknessMm
+      )} mm`;
+      values.minimum_recommended_shaft_length = `${pretty(
+        guidePinSizing.minimumRecommendedShaftLengthMm
+      )} mm`;
+      values.print_orientation = "flat, shaft on X-axis";
+      return values;
+    }
+
     values.inner_diameter = `${pretty(payload.params.innerDiameterMm)} mm`;
     values.outer_diameter = `${pretty(payload.params.outerDiameterMm)} mm`;
     values.length = `${pretty(payload.params.lengthMm)} mm`;
     values.rotation_degrees = payload.params.rotationDegrees;
     values.axial_travel = `${pretty(payload.params.axialTravelMm)} mm`;
     return values;
-  }, [payload, cascadeSizing]);
+  }, [payload, cascadeSizing, guidePinSizing]);
 
   const safetyWarnings = [
     "CAD output is a starting point for prototyping.",
@@ -2133,6 +2321,94 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
           </div>
           <p className="text-sm text-labMuted">
             In automatic mode, carrier length defaults to optical stack length + 3.0mm.
+          </p>
+        </div>
+      )}
+
+      {partType === "guide_pin" && (
+        <div className="panel space-y-3 p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">
+            Guide Pin Controls
+          </h3>
+          <div className="grid gap-4 md:grid-cols-2">
+            <NumberInput
+              label="Pin shaft diameter (mm)"
+              value={guidePinResolved.pinShaftDiameterMm}
+              min={0.5}
+              step={0.05}
+              onChange={(event) =>
+                setGuidePinOverride(
+                  "pinShaftDiameterMm",
+                  Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : undefined
+                )
+              }
+            />
+            <NumberInput
+              label="Pin shaft length (mm)"
+              value={guidePinResolved.pinShaftLengthMm}
+              min={1}
+              step={0.1}
+              onChange={(event) =>
+                setGuidePinOverride(
+                  "pinShaftLengthMm",
+                  Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : undefined
+                )
+              }
+            />
+            <NumberInput
+              label="Pin head diameter (mm)"
+              value={guidePinResolved.pinHeadDiameterMm}
+              min={1}
+              step={0.1}
+              onChange={(event) =>
+                setGuidePinOverride(
+                  "pinHeadDiameterMm",
+                  Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : undefined
+                )
+              }
+            />
+            <NumberInput
+              label="Pin head thickness (mm)"
+              value={guidePinResolved.pinHeadThicknessMm}
+              min={0.4}
+              step={0.05}
+              onChange={(event) =>
+                setGuidePinOverride(
+                  "pinHeadThicknessMm",
+                  Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : undefined
+                )
+              }
+            />
+            <NumberInput
+              label="Optional tip chamfer (mm)"
+              value={guidePinResolved.tipChamferMm}
+              min={0}
+              step={0.05}
+              onChange={(event) =>
+                setGuidePinOverride(
+                  "tipChamferMm",
+                  Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : undefined
+                )
+              }
+            />
+            <NumberInput
+              label="Quantity"
+              value={guidePinResolved.quantity}
+              min={1}
+              step={1}
+              onChange={(event) =>
+                setGuidePinOverride(
+                  "quantity",
+                  Number.isFinite(event.target.valueAsNumber)
+                    ? Math.max(1, Math.round(event.target.valueAsNumber))
+                    : undefined
+                )
+              }
+            />
+          </div>
+          <p className="text-sm text-labMuted">
+            Auto size defaults: shaft diameter = min(slot width, carrier pin hole) - 0.2mm. If exact wall engagement
+            data is unavailable, an 8.0mm shaft length baseline is used.
           </p>
         </div>
       )}

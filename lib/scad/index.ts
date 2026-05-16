@@ -3,6 +3,7 @@ import type {
   DiffusionHolderParams,
   ElementCupParams,
   FixedPLBarrelWithSlotsParams,
+  GuidePinParams,
   IrisDiskParams,
   MainBarrelParams,
   MovingCarrierParams,
@@ -14,6 +15,7 @@ import { generateCamSleeveScad } from "@/lib/scad/camSleeve";
 import { generateDiffusionHolderScad } from "@/lib/scad/diffusionHolder";
 import { generateElementCupScad } from "@/lib/scad/elementCup";
 import { generateFixedPlBarrelWithSlotsPushPullV4Scad } from "@/lib/scad/fixedPlBarrelWithSlots";
+import { generateGuidePinScad } from "@/lib/scad/guidePin";
 import { generateIrisDiskScad } from "@/lib/scad/irisDisk";
 import { generateMainBarrelScad } from "@/lib/scad/mainBarrel";
 import { generateMovingCarrierScad } from "@/lib/scad/movingCarrier";
@@ -26,6 +28,7 @@ export {
   generateDiffusionHolderScad,
   generateElementCupScad,
   generateFixedPlBarrelWithSlotsPushPullV4Scad,
+  generateGuidePinScad,
   generateIrisDiskScad,
   generateMainBarrelScad,
   generateMovingCarrierScad,
@@ -44,7 +47,8 @@ export type ScadPayload =
   | { type: "moving_carrier"; params: MovingCarrierParams }
   | { type: "cam_sleeve"; params: CamSleeveParams }
   | { type: "fixed_pl_barrel_with_slots"; params: FixedPLBarrelWithSlotsParams }
-  | { type: "sliding_optical_carrier"; params: SlidingOpticalCarrierParams };
+  | { type: "sliding_optical_carrier"; params: SlidingOpticalCarrierParams }
+  | { type: "guide_pin"; params: GuidePinParams };
 
 export function generateScad(payload: ScadPayload): string {
   switch (payload.type) {
@@ -68,6 +72,8 @@ export function generateScad(payload: ScadPayload): string {
       return generateFixedPlBarrelWithSlotsPushPullV4Scad(payload.params);
     case "sliding_optical_carrier":
       return generateSlidingOpticalCarrierScad(payload.params);
+    case "guide_pin":
+      return generateGuidePinScad(payload.params);
     default:
       return "";
   }

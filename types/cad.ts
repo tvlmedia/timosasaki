@@ -289,6 +289,21 @@ export type SlidingOpticalCarrierParams = {
   facets: number;
 };
 
+export type GuidePinParams = {
+  partName: string;
+  pinShaftDiameterMm: number;
+  pinShaftLengthMm: number;
+  pinHeadDiameterMm: number;
+  pinHeadThicknessMm: number;
+  tipChamferMm?: number;
+  quantity: number;
+  slotWidthMm?: number;
+  carrierPinHoleDiameterMm?: number;
+  fixedBarrelWallThicknessMm?: number;
+  carrierWallThicknessMm?: number;
+  facets: number;
+};
+
 export type SlidingFocusAssemblyMacroParams = {
   partName: string;
   plStepReferencePath: string;

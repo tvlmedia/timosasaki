@@ -10,6 +10,7 @@ export type CadPartType =
   | "retaining_ring"
   | "fixed_pl_barrel_with_slots"
   | "sliding_optical_carrier"
+  | "guide_pin"
   | "main_barrel"
   | "moving_carrier"
   | "cam_sleeve";
@@ -22,6 +23,7 @@ const partOptions: Array<{ value: CadPartType; label: string }> = [
   { value: "retaining_ring", label: "Retaining ring from retaining ring item" },
   { value: "fixed_pl_barrel_with_slots", label: "Fixed PL barrel with axial guide slots" },
   { value: "sliding_optical_carrier", label: "Sliding optical carrier with pin holes" },
+  { value: "guide_pin", label: "Push/Pull guide pin for sliding carrier" },
   { value: "main_barrel", label: "Main barrel (legacy/simple)" }
 ];
 
