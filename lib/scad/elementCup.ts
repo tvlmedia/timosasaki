@@ -107,7 +107,11 @@ function generateAdvancedProfileScad(params: ElementCupParams): string {
   const sections = getAdvancedSections(params);
   const insertionSide = resolveInsertionSide(params);
   const maxDiameterMm = toPositive(advanced.maxDiameterMm);
-  const seatClearanceMm = params.seatClearanceMm;
+  const seatClearanceMm = toPositive(params.glassSeatDiametralClearanceMm ?? params.seatClearanceMm);
+  const internalStepChamferMm =
+    params.internalStepChamferEnabled === false
+      ? 0
+      : toPositive(params.internalStepChamferMm ?? 0.3);
   const wallThicknessMm = params.wallThicknessMm;
   const rearLipMm = params.rearLipMm;
   const sectionData = buildInsertionSafeBoreSections(sections, maxDiameterMm, insertionSide);
@@ -142,6 +146,13 @@ bore${index + 1}_l = ${n(section.lengthMm)};`
     )
     .join("\n\n");
 
+  const transitionChamferCalls = sectionData.sections
+    .slice(1)
+    .map((section, index) => {
+      return `    bore_transition_cutter(${n(section.zStartMm)}, bore${index + 1}_d, bore${index + 2}_d);`;
+    })
+    .join("\n");
+
   const boreCutCalls = sectionData.sections
     .map((_, index) => {
       const isLast = index === sectionData.sections.length - 1;
@@ -152,7 +163,7 @@ bore${index + 1}_l = ${n(section.lengthMm)};`
   const debugBores = sectionData.sections
     .map(
       (section, index) =>
-        `echo("Bore ${index + 1}: z ", ${n(section.zStartMm)}, " to ", ${n(section.zStartMm + section.lengthMm)}, " d ", bore${index + 1}_d);`
+        `echo("Bore ${index + 1}: z ", ${n(section.zStartMm)}, " to ", ${n(section.zStartMm + section.lengthMm)}, " measured d ", bore${index + 1}_measured_d, " generated d ", bore${index + 1}_d);`
     )
     .join("\n");
 
@@ -160,6 +171,7 @@ bore${index + 1}_l = ${n(section.lengthMm)};`
 // Advanced profile remains FRONT -> SENSOR (optical order).
 // Z=0 is insertion side for generated mechanics.
 // Bore before and through max diameter section uses max diameter so the lens block can physically slide into the cup.
+// Glass seat clearance is DIAMETRAL.
 
 show_cutaway = false;
 
@@ -174,6 +186,8 @@ cup_rear_offset_mm = ${n(params.cupRearOffsetMm ?? 0)};
 ${sectionVars}
 
 seat_clearance = ${n(seatClearanceMm)};
+glass_seat_diametral_clearance = seat_clearance;
+internal_step_chamfer_mm = ${n(internalStepChamferMm)};
 wall_thickness = ${n(wallThicknessMm)};
 rear_lip = ${n(rearLipMm)};
 extra_depth = ${n(extraDepthMm)};
@@ -201,6 +215,21 @@ module bore_cutter(z, h, d) {
     cylinder(h = h + eps * 2, d = d);
 }
 
+module bore_transition_cutter(z, d_from, d_to) {
+  if (internal_step_chamfer_mm > 0.0001 && abs(d_from - d_to) > 0.0001) {
+    transition_start = max(0, z - internal_step_chamfer_mm / 2);
+    translate([0, 0, transition_start - eps])
+      cylinder(h = internal_step_chamfer_mm + eps * 2, d1 = d_from, d2 = d_to);
+  }
+}
+
+module entry_lead_in_cutter(d_entry) {
+  if (internal_step_chamfer_mm > 0.0001) {
+    translate([0, 0, -eps])
+      cylinder(h = internal_step_chamfer_mm + eps * 2, d1 = d_entry + internal_step_chamfer_mm * 2, d2 = d_entry);
+  }
+}
+
 module rear_clear_hole_cutter() {
   translate([0, 0, section_sum - eps])
     cylinder(h = rear_lip + extra_depth + eps * 4, d = rear_clear_hole);
@@ -216,6 +245,8 @@ module stepped_lens_cup() {
     cup_outer();
 
 ${boreCutCalls}
+${transitionChamferCalls ? `\n${transitionChamferCalls}\n` : ""}
+    entry_lead_in_cutter(bore1_d);
 
     rear_clear_hole_cutter();
 
@@ -237,6 +268,8 @@ echo("Cup insertion side = ", cup_insertion_side);
 echo("Cup retaining side = ", cup_retaining_side);
 echo("Cup front offset mm = ", cup_front_offset_mm);
 echo("Cup rear offset mm = ", cup_rear_offset_mm);
+echo("Glass seat diametral clearance = ", glass_seat_diametral_clearance);
+echo("Internal step chamfer mm = ", internal_step_chamfer_mm);
 echo("Advanced section count = ", ${sections.length});
 echo("Max section index used = ", ${sectionData.maxSectionIndex + 1});
 ${debugBores}
@@ -244,14 +277,26 @@ ${debugBores}
 }
 
 export function generateElementCupScad(params: ElementCupParams): string {
+  const seatClearanceMm = toPositive(params.glassSeatDiametralClearanceMm ?? params.seatClearanceMm);
+  const internalStepChamferMm =
+    params.internalStepChamferEnabled === false
+      ? 0
+      : toPositive(params.internalStepChamferMm ?? 0.3);
+
   if (hasCompleteAdvancedProfile(params)) {
-    return generateAdvancedProfileScad(params);
+    return generateAdvancedProfileScad({
+      ...params,
+      seatClearanceMm,
+      glassSeatDiametralClearanceMm: seatClearanceMm,
+      internalStepChamferMm,
+      internalStepChamferEnabled: internalStepChamferMm > 0
+    });
   }
 
   if (hasCompleteSteppedProfile(params) && params.steppedProfile) {
     const stepped = params.steppedProfile;
-    const largeSeatDiameter = stepped.largeDiameterMm + params.seatClearanceMm;
-    const smallSeatDiameter = stepped.smallDiameterMm + params.seatClearanceMm;
+    const largeSeatDiameter = stepped.largeDiameterMm + seatClearanceMm;
+    const smallSeatDiameter = stepped.smallDiameterMm + seatClearanceMm;
     const totalGlassThickness = stepped.largeSectionThicknessMm + stepped.smallSectionThicknessMm;
     const cupDepth = params.cupDepthMm ?? totalGlassThickness + params.rearLipMm + 0.5;
     const outerDiameter =
@@ -275,7 +320,9 @@ large_diameter = ${n(stepped.largeDiameterMm)};
 small_diameter = ${n(stepped.smallDiameterMm)};
 large_section_thickness = ${n(stepped.largeSectionThicknessMm)};
 small_section_thickness = ${n(stepped.smallSectionThicknessMm)};
-seat_clearance = ${n(params.seatClearanceMm)};
+seat_clearance = ${n(seatClearanceMm)};
+glass_seat_diametral_clearance = ${n(seatClearanceMm)};
+internal_step_chamfer_mm = ${n(internalStepChamferMm)};
 
 large_seat_diameter = large_diameter + seat_clearance;
 small_seat_diameter = small_diameter + seat_clearance;
@@ -289,6 +336,21 @@ front_opening = ${n(frontOpening)};
 large_side_faces = "${largeSideFaces}";
 use_advanced_profile = true;
 
+module transition_lead_in(z, d_from, d_to) {
+  if (internal_step_chamfer_mm > 0.0001 && abs(d_from - d_to) > 0.0001) {
+    start_z = max(0, z - internal_step_chamfer_mm / 2);
+    translate([0, 0, start_z - 0.02])
+      cylinder(h = internal_step_chamfer_mm + 0.04, d1 = d_from, d2 = d_to);
+  }
+}
+
+module insertion_entry_lead_in(d_entry) {
+  if (internal_step_chamfer_mm > 0.0001) {
+    translate([0, 0, -0.02])
+      cylinder(h = internal_step_chamfer_mm + 0.04, d1 = d_entry + internal_step_chamfer_mm * 2, d2 = d_entry);
+  }
+}
+
 module stepped_element_cup() {
   difference() {
     cylinder(h = cup_depth, d = outer_diameter);
@@ -301,6 +363,7 @@ module stepped_element_cup() {
       // Front large-diameter seat section.
       translate([0, 0, rear_lip + small_section_thickness])
         cylinder(h = large_section_thickness + 0.8, d = large_seat_diameter);
+      transition_lead_in(rear_lip + small_section_thickness, small_seat_diameter, large_seat_diameter);
     } else {
       // Rear large-diameter seat section (default, and for large_side_rear).
       translate([0, 0, rear_lip])
@@ -309,7 +372,9 @@ module stepped_element_cup() {
       // Front small-diameter seat section.
       translate([0, 0, rear_lip + large_section_thickness])
         cylinder(h = small_section_thickness + 0.8, d = small_seat_diameter);
+      transition_lead_in(rear_lip + large_section_thickness, large_seat_diameter, small_seat_diameter);
     }
+    insertion_entry_lead_in(large_side_faces == "front" ? small_seat_diameter : large_seat_diameter);
 
     // Optical clear opening through front.
     translate([0, 0, -0.1])
@@ -318,6 +383,12 @@ module stepped_element_cup() {
 }
 
 stepped_element_cup();
+echo("Measured large section diameter = ", large_diameter);
+echo("Measured small section diameter = ", small_diameter);
+echo("Glass seat diametral clearance = ", glass_seat_diametral_clearance);
+echo("Generated large bore diameter = ", large_seat_diameter);
+echo("Generated small bore diameter = ", small_seat_diameter);
+echo("Internal step chamfer mm = ", internal_step_chamfer_mm);
 `;
   }
 
@@ -329,7 +400,7 @@ stepped_element_cup();
       ? profileSegments.reduce((sum, segment) => sum + segment.depthMm, 0)
       : params.glassThicknessMm;
 
-  const seatDiameter = params.glassDiameterMm + params.seatClearanceMm;
+  const seatDiameter = params.glassDiameterMm + seatClearanceMm;
   const outerDiameter = params.outerDiameterMm ?? seatDiameter + params.wallThicknessMm * 2;
   const cupDepth = params.cupDepthMm ?? profileDepth + params.rearLipMm + 0.5;
   const frontOpening = Math.max(params.glassDiameterMm - params.retainingLipMm * 2, 0.4);
@@ -360,6 +431,18 @@ module stepped_glass_seat() {
     translate([0, 0, profile_z_starts[i]])
       cylinder(h = segment_depth + 0.2, d = segment_seat_diameter);
   }
+  if (internal_step_chamfer_mm > 0.0001 && len(profile_diameters) > 1) {
+    for (i = [1 : len(profile_diameters) - 1]) {
+      prev_d = profile_diameters[i - 1] + seat_clearance;
+      next_d = profile_diameters[i] + seat_clearance;
+      transition_z = profile_z_starts[i];
+      transition_start = max(0, transition_z - internal_step_chamfer_mm / 2);
+      if (abs(prev_d - next_d) > 0.0001) {
+        translate([0, 0, transition_start - 0.02])
+          cylinder(h = internal_step_chamfer_mm + 0.04, d1 = prev_d, d2 = next_d);
+      }
+    }
+  }
 }
 `
     : "";
@@ -374,13 +457,16 @@ module stepped_glass_seat() {
     translate([0, 0, rear_lip])
       cylinder(h = cup_depth + 0.2, d = seat_diameter);
 `;
+  const entryLeadInDiameterExpr = usesProfile ? "(profile_diameters[0] + seat_clearance)" : "seat_diameter";
 
   return `${scadHeader(params.partName, params.facets)}part_name = "${params.partName}";
 glass_diameter = ${n(params.glassDiameterMm)};
 glass_thickness = ${n(params.glassThicknessMm)};
 profile_total_depth = ${n(profileDepth)};
-seat_clearance = ${n(params.seatClearanceMm)};
+seat_clearance = ${n(seatClearanceMm)};
+glass_seat_diametral_clearance = ${n(seatClearanceMm)};
 seat_diameter = ${n(seatDiameter)};
+internal_step_chamfer_mm = ${n(internalStepChamferMm)};
 wall_thickness = ${n(params.wallThicknessMm)};
 outer_diameter = ${n(outerDiameter)};
 cup_depth = ${n(cupDepth)};
@@ -394,6 +480,11 @@ module element_cup() {
   difference() {
     cylinder(h = cup_depth, d = outer_diameter);
 ${cavityCut}
+    if (internal_step_chamfer_mm > 0.0001) {
+      entry_d = ${entryLeadInDiameterExpr};
+      translate([0, 0, -0.02])
+        cylinder(h = internal_step_chamfer_mm + 0.04, d1 = entry_d + internal_step_chamfer_mm * 2, d2 = entry_d);
+    }
 
     // Optical clear opening
     translate([0, 0, -0.1])
@@ -402,5 +493,9 @@ ${cavityCut}
 }
 
 element_cup();
+echo("Measured glass diameter = ", glass_diameter);
+echo("Glass seat diametral clearance = ", glass_seat_diametral_clearance);
+echo("Generated seat bore diameter = ", seat_diameter);
+echo("Internal step chamfer mm = ", internal_step_chamfer_mm);
 `;
 }

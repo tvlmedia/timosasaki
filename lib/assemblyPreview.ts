@@ -85,10 +85,19 @@ const DEFAULT_CARRIER_TO_BARREL_CLEARANCE_MM = 0.8;
 const DEFAULT_FIXED_BARREL_WALL_THICKNESS_MM = 2.0;
 const DEFAULT_CARRIER_LENGTH_MARGIN_MM = 3.0;
 const DEFAULT_SLOT_LENGTH_WITHOUT_FOCUS_TRAVEL_MM = 32.0;
+const DEFAULT_GLASS_SEAT_DIAMETRAL_CLEARANCE_MM = 0.5;
 
 function toPositive(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
   return value;
+}
+
+function getGlassSeatDiametralClearanceMm(project: LensProject): number {
+  const explicit = toPositive(project.cadDefaults.glassSeatDiametralClearanceMm);
+  if (explicit > 0) return explicit;
+  const legacy = toPositive(project.cadDefaults.printToleranceMm);
+  if (legacy > 0) return legacy;
+  return DEFAULT_GLASS_SEAT_DIAMETRAL_CLEARANCE_MM;
 }
 
 function roundUpToIncrement(value: number, increment: number): number {
@@ -312,6 +321,7 @@ export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewRes
       const cupDepthMm = estimateLensCupDepthMm(item, project.cadDefaults.retainingLipMm);
       const sourceDiameter = toPositive(item.diameterMm);
       const token = extractElementToken(item.name) ?? `E${lensCounter}`;
+      const glassSeatDiametralClearanceMm = getGlassSeatDiametralClearanceMm(project);
       appendPart({
         id: `${item.id}::cup`,
         label: `${item.name} cup`,
@@ -322,7 +332,7 @@ export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewRes
         sourceLabel: item.name,
         lengthMm: cupDepthMm,
         outerDiameterMm: derived.targetStackOuterDiameterMm,
-        innerDiameterMm: sourceDiameter > 0 ? sourceDiameter + Math.max(0, project.cadDefaults.printToleranceMm) : undefined,
+        innerDiameterMm: sourceDiameter > 0 ? sourceDiameter + glassSeatDiametralClearanceMm : undefined,
         warnings: [],
         notes: "Generated lens cup"
       });
@@ -726,7 +736,7 @@ export function getAssemblyPreviewData(project: LensProject): AssemblyPreviewRes
     const clearApertureMm = toPositive(glass.clearApertureMm);
     const lipEnabled = glass.retainingLipEnabled ?? true;
     const lipInnerMm = toPositive(glass.retainingLipInnerDiameterMm);
-    const boreEstimateMm = toPositive(glass.diameterMm) + Math.max(0, project.cadDefaults.printToleranceMm);
+    const boreEstimateMm = toPositive(glass.diameterMm) + getGlassSeatDiametralClearanceMm(project);
 
     if (lipEnabled && clearApertureMm > 0 && lipInnerMm > 0 && lipInnerMm <= clearApertureMm) {
       addCheck(

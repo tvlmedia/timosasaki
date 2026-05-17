@@ -37,6 +37,37 @@ export default function SettingsPage() {
             onChange={(event) => setDefaults((prev) => (prev ? { ...prev, printToleranceMm: Number(event.target.value) } : prev))}
           />
           <NumberInput
+            label="Glass seat diametral clearance (mm)"
+            value={defaults.glassSeatDiametralClearanceMm ?? 0.5}
+            min={0}
+            step={0.01}
+            onChange={(event) =>
+              setDefaults((prev) =>
+                prev
+                  ? { ...prev, glassSeatDiametralClearanceMm: Math.max(0, Number(event.target.value)) }
+                  : prev
+              )
+            }
+          />
+          <NumberInput
+            label="Internal step chamfer / lead-in (mm)"
+            value={defaults.internalStepChamferMm ?? 0.3}
+            min={0}
+            step={0.01}
+            onChange={(event) =>
+              setDefaults((prev) =>
+                prev
+                  ? { ...prev, internalStepChamferMm: Math.max(0, Number(event.target.value)) }
+                  : prev
+              )
+            }
+          />
+          <p className="text-xs text-labMuted">
+            Glass seat clearance is diametral (added to measured glass diameter). FDM internal bores often print
+            undersized; increase this only if real glass does not slide into cups. This affects cup internals, not cup
+            OD.
+          </p>
+          <NumberInput
             label="Radial clearance (mm)"
             value={defaults.radialClearanceMm}
             min={0}

@@ -172,6 +172,8 @@ const DEFAULT_GUIDE_PIN_HEAD_DIAMETER_MM = 5.5;
 const DEFAULT_GUIDE_PIN_HEAD_THICKNESS_MM = 1.8;
 const DEFAULT_GUIDE_PIN_TIP_CHAMFER_MM = 0.2;
 const DEFAULT_GUIDE_PIN_QUANTITY = 2;
+const DEFAULT_GLASS_SEAT_DIAMETRAL_CLEARANCE_MM = 0.5;
+const DEFAULT_INTERNAL_STEP_CHAMFER_MM = 0.3;
 
 function roundUpToIncrement(value: number, increment: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
@@ -181,6 +183,20 @@ function roundUpToIncrement(value: number, increment: number): number {
 
 function toFiniteOrUndefined(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function getGlassSeatDiametralClearanceMm(defaults: CadDefaults): number {
+  const explicit = toPositive(defaults.glassSeatDiametralClearanceMm);
+  if (explicit > 0) return Number(explicit.toFixed(3));
+  const legacy = toPositive(defaults.printToleranceMm);
+  if (legacy > 0) return Number(legacy.toFixed(3));
+  return DEFAULT_GLASS_SEAT_DIAMETRAL_CLEARANCE_MM;
+}
+
+function getInternalStepChamferMm(defaults: CadDefaults): number {
+  const explicit = toPositive(defaults.internalStepChamferMm);
+  if (explicit > 0) return Number(explicit.toFixed(3));
+  return DEFAULT_INTERNAL_STEP_CHAMFER_MM;
 }
 
 function getFocusTravelDerived(project: LensProject): {
@@ -997,7 +1013,7 @@ function buildInsertionSafeBoreSections(
   profile: ElementCupParams["advancedProfile"] | undefined,
   seatClearanceMm: number,
   insertionSide: ResolvedCupInsertionSide = "front"
-): Array<{ zStartMm: number; zEndMm: number; diameterMm: number }> {
+): Array<{ zStartMm: number; zEndMm: number; measuredDiameterMm: number; generatedBoreDiameterMm: number; diameterMm: number }> {
   if (!profile?.enabled) return [];
   const orderedSections = (profile.sections ?? [])
     .slice()
@@ -1016,7 +1032,13 @@ function buildInsertionSafeBoreSections(
     }
   });
 
-  const bores: Array<{ zStartMm: number; zEndMm: number; diameterMm: number }> = [];
+  const bores: Array<{
+    zStartMm: number;
+    zEndMm: number;
+    measuredDiameterMm: number;
+    generatedBoreDiameterMm: number;
+    diameterMm: number;
+  }> = [];
   let z = 0;
   sections.forEach((section, index) => {
     const zStart = z;
@@ -1025,13 +1047,19 @@ function buildInsertionSafeBoreSections(
     const measuredDiameter = index <= maxSectionIndex ? profile.maxDiameterMm : section.diameterMm;
     const boreDiameter = measuredDiameter + seatClearanceMm;
     const previous = bores[bores.length - 1];
-    if (previous && Math.abs(previous.diameterMm - boreDiameter) < 0.0001) {
+    if (
+      previous &&
+      Math.abs(previous.generatedBoreDiameterMm - boreDiameter) < 0.0001 &&
+      Math.abs(previous.measuredDiameterMm - measuredDiameter) < 0.0001
+    ) {
       previous.zEndMm = zEnd;
       return;
     }
     bores.push({
       zStartMm: zStart,
       zEndMm: zEnd,
+      measuredDiameterMm: measuredDiameter,
+      generatedBoreDiameterMm: boreDiameter,
       diameterMm: boreDiameter
     });
   });
@@ -1131,7 +1159,8 @@ function createPayload(
           ? localGlassMaxDiameterMm
           : glass?.diameterMm ?? cascade.sourceGlassMaxDiameterMm ?? defaults.defaultInnerDiameterMm - 4;
       const localCupDepthMm = estimateLensCupDepthMm(glass, defaults);
-      const seatClearanceMm = defaults.printToleranceMm;
+      const glassSeatDiametralClearanceMm = getGlassSeatDiametralClearanceMm(defaults);
+      const internalStepChamferMm = getInternalStepChamferMm(defaults);
       const resolvedOuterDiameter = cascade.cupOuterDiameterMm;
       const advancedProfileLengthMm = getAdvancedProfileTotalLengthMm(advancedProfile);
       const profileLengthMm =
@@ -1176,7 +1205,10 @@ function createPayload(
           steppedProfile,
           advancedProfile,
           profileSegments: profileSegments.length ? profileSegments : undefined,
-          seatClearanceMm,
+          seatClearanceMm: glassSeatDiametralClearanceMm,
+          glassSeatDiametralClearanceMm,
+          internalStepChamferMm,
+          internalStepChamferEnabled: internalStepChamferMm > 0,
           wallThicknessMm: Number(defaults.wallThicknessMm.toFixed(3)),
           outerDiameterMm: Number(resolvedOuterDiameter.toFixed(3)),
           retainingLipMm: retainingLipEnabled ? retainingLipThicknessMm : 0,
@@ -1981,9 +2013,18 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
   const elementCupValidationWarnings = (() => {
     if (payload.type !== "element_cup") return [] as string[];
     const warnings: string[] = [];
+    const glassSeatDiametralClearanceMm = toPositive(
+      payload.params.glassSeatDiametralClearanceMm ?? payload.params.seatClearanceMm
+    );
     const cupWallThicknessMm = ((payload.params.outerDiameterMm ?? 0) - payload.params.glassDiameterMm) / 2;
     if (cupWallThicknessMm < 1.5) {
       warnings.push("Lens cup wall may be too thin.");
+    }
+    if (glassSeatDiametralClearanceMm > 0 && glassSeatDiametralClearanceMm < 0.3) {
+      warnings.push("Glass seat clearance may be too tight for FDM printing.");
+    }
+    if (glassSeatDiametralClearanceMm > 0.8) {
+      warnings.push("Glass may sit loose in cup. Use retaining rings or reduce clearance.");
     }
     if (
       toPositive(payload.params.outerDiameterMm) > 0 &&
@@ -1995,7 +2036,7 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
     const retainingLipEnabled = payload.params.retainingLipEnabled ?? true;
     const retainingLipInnerDiameterMm = toPositive(payload.params.retainingLipInnerDiameterMm);
     if (retainingLipEnabled && retainingLipInnerDiameterMm > 0) {
-      const maxPracticalInner = toPositive(payload.params.glassDiameterMm + payload.params.seatClearanceMm);
+      const maxPracticalInner = toPositive(payload.params.glassDiameterMm + glassSeatDiametralClearanceMm);
       if (retainingLipInnerDiameterMm >= maxPracticalInner) {
         warnings.push("Retaining lip inner diameter is too large; no retaining lip remains.");
       }
@@ -2044,6 +2085,18 @@ export function CadGeneratorPanel({ project }: { project: LensProject }) {
         payload.params.seatClearanceMm,
         insertionSide
       );
+      const hasInvalidBoreSection = sortedSections.some(
+        (section) => section.diameterMm + payload.params.seatClearanceMm <= section.diameterMm + 0.0001
+      );
+      if (hasInvalidBoreSection) {
+        warnings.push("Advanced profile bore must be larger than measured glass section diameter.");
+      }
+      const hasInsertionBoreTooSmall = insertionSafeBoreSections.some(
+        (section) => section.generatedBoreDiameterMm <= section.measuredDiameterMm + 0.0001
+      );
+      if (hasInsertionBoreTooSmall) {
+        warnings.push("Advanced profile bore must be larger than measured glass section diameter.");
+      }
       const lastBoreDiameter =
         insertionSafeBoreSections[insertionSafeBoreSections.length - 1]?.diameterMm ??
         advanced.maxDiameterMm + payload.params.seatClearanceMm;
@@ -2611,6 +2664,10 @@ Auto-fit System:
 - slot_length: ${pretty(cascadeSizing.slotLengthMm)} mm
 - recommended_focus_travel: ${focusDerived.recommendedPrototypeTravelMm ? `${pretty(focusDerived.recommendedPrototypeTravelMm)} mm` : "not available"}
 - recommended_slot_length: ${focusDerived.recommendedSlotLengthMm ? `${pretty(focusDerived.recommendedSlotLengthMm)} mm` : "not available"}
+- lens_cup_glass_seat_diametral_clearance: ${pretty(getGlassSeatDiametralClearanceMm(project.cadDefaults))} mm
+
+Lens cup fit note:
+- Lens cup internal bores include glass seat diametral clearance: ${pretty(getGlassSeatDiametralClearanceMm(project.cadDefaults))}mm.
 
 Stack Order (front -> sensor):
 ${stackSummaryLines.join("\n")}
@@ -2670,6 +2727,10 @@ ${dedupErrors.length ? dedupErrors.map((line) => `- ${line}`).join("\n") : "- no
     };
 
     if (payload.type === "element_cup") {
+      const glassSeatDiametralClearanceMm = toPositive(
+        payload.params.glassSeatDiametralClearanceMm ?? payload.params.seatClearanceMm
+      );
+      const generatedSeatBoreDiameterMm = payload.params.glassDiameterMm + glassSeatDiametralClearanceMm;
       values.largest_glass_diameter = `${pretty(cascadeSizing.sourceGlassMaxDiameterMm)} mm`;
       values.carrier_inner_diameter = `${pretty(cascadeSizing.carrierInnerDiameterMm)} mm`;
       values.cup_to_carrier_clearance = `${pretty(cascadeSizing.cupToCarrierClearanceMm)} mm`;
@@ -2678,9 +2739,13 @@ ${dedupErrors.length ? dedupErrors.map((line) => `- ${line}`).join("\n") : "- no
       values.lens_cup_outer_diameter = `${pretty(payload.params.outerDiameterMm ?? 0)} mm`;
       values.spacer_outer_diameter = `${pretty(cascadeSizing.targetStackOuterDiameterMm)} mm`;
       values.source_glass_max_diameter = `${pretty(cascadeSizing.sourceGlassMaxDiameterMm)} mm`;
+      values.measured_glass_diameter = `${pretty(payload.params.glassDiameterMm)} mm`;
       values.glass_diameter = `${pretty(payload.params.glassDiameterMm)} mm`;
       values.glass_thickness = `${pretty(payload.params.glassThicknessMm)} mm`;
-      values.seat_clearance = `${pretty(payload.params.seatClearanceMm)} mm`;
+      values.glass_seat_diametral_clearance_mm = `${pretty(glassSeatDiametralClearanceMm)} mm`;
+      values.generated_seat_bore_diameter = `${pretty(generatedSeatBoreDiameterMm)} mm`;
+      values.internal_step_chamfer_mm = `${pretty(payload.params.internalStepChamferMm ?? 0)} mm`;
+      values.internal_step_chamfer_enabled = payload.params.internalStepChamferEnabled ?? false;
       values.wall_thickness = `${pretty(payload.params.wallThicknessMm)} mm`;
       values.outer_diameter = `${pretty(payload.params.outerDiameterMm ?? 0)} mm`;
       values.cup_depth = `${pretty(payload.params.cupDepthMm ?? cascadeSizing.cupDepthMm ?? 0)} mm`;
@@ -2703,6 +2768,20 @@ ${dedupErrors.length ? dedupErrors.map((line) => `- ${line}`).join("\n") : "- no
           payload.params.seatClearanceMm,
           payload.params.resolvedCupInsertionSide ?? "front"
         );
+        const advancedGeneratedSections = payload.params.advancedProfile.sections
+          .slice()
+          .sort((a, b) => a.index - b.index)
+          .filter((section) => toPositive(section.diameterMm) > 0 && toPositive(section.lengthMm) > 0)
+          .map(
+            (section, index) =>
+              `S${index + 1} ${section.label ?? ""} measured ${pretty(section.diameterMm)} -> bore ${pretty(
+                section.diameterMm + glassSeatDiametralClearanceMm
+              )} mm`
+          )
+          .join(" | ");
+        const insertionSafeBoreDiameterMm = toPositive(payload.params.advancedProfile.maxDiameterMm)
+          ? payload.params.advancedProfile.maxDiameterMm + glassSeatDiametralClearanceMm
+          : 0;
         values.advanced_profile_enabled = "yes";
         values.totalLengthMm = `${pretty(payload.params.advancedProfile.totalLengthMm)} mm`;
         values.maxDiameterMm = `${pretty(payload.params.advancedProfile.maxDiameterMm)} mm`;
@@ -2710,11 +2789,19 @@ ${dedupErrors.length ? dedupErrors.map((line) => `- ${line}`).join("\n") : "- no
         values.section_length_sum = `${pretty(sectionSum)} mm`;
         values.length_difference = `${pretty(lengthDifference)} mm`;
         values.number_of_sections = payload.params.advancedProfile.sections.length;
+        values.advanced_section_bores = advancedGeneratedSections || "none";
+        values.insertion_safe_bore_diameter = insertionSafeBoreDiameterMm
+          ? `${pretty(insertionSafeBoreDiameterMm)} mm`
+          : "n/a";
         values.insertionSafe = boreSections.length > 0;
         values.bore_sections_generated =
           boreSections.length > 0
-            ? boreSections
-                .map((section) => `z ${pretty(section.zStartMm)}-${pretty(section.zEndMm)} d ${pretty(section.diameterMm)}`)
+            ? boreSections.map(
+                (section) =>
+                  `z ${pretty(section.zStartMm)}-${pretty(section.zEndMm)} measured ${pretty(
+                    section.measuredDiameterMm
+                  )} -> bore ${pretty(section.generatedBoreDiameterMm)}`
+              )
                 .join(" | ")
             : "none";
       }
@@ -3147,6 +3234,34 @@ ${dedupErrors.length ? dedupErrors.map((line) => `- ${line}`).join("\n") : "- no
           <p className="text-sm text-labMuted">
             Auto size defaults: shaft diameter = min(slot width, carrier pin hole) - 0.2mm. If exact wall engagement
             data is unavailable, an 8.0mm shaft length baseline is used.
+          </p>
+        </div>
+      )}
+
+      {partType === "element_cup" && (
+        <div className="panel space-y-3 p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-labMuted">
+            Lens Cup Internal Fit
+          </h3>
+          <div className="grid gap-4 md:grid-cols-2">
+            <NumberInput
+              label="Glass seat diametral clearance (mm)"
+              value={getGlassSeatDiametralClearanceMm(project.cadDefaults)}
+              disabled
+            />
+            <NumberInput
+              label="Internal step chamfer / lead-in (mm)"
+              value={getInternalStepChamferMm(project.cadDefaults)}
+              disabled
+            />
+          </div>
+          <p className="text-sm text-labMuted">
+            Glass seat clearance is diametral. FDM internal bores often print undersized. If real glass does not slide
+            into stepped cups, increase this value in Settings. This only changes internal cup bores, not cup OD.
+          </p>
+          <p className="text-xs text-labMuted">
+            Suggested diametral presets: FDM rough fit 0.60mm, FDM normal fit 0.50mm, FDM tighter fit 0.35mm, resin/CNC
+            concept 0.15-0.25mm.
           </p>
         </div>
       )}

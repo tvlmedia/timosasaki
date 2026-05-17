@@ -7,6 +7,8 @@ import type {
 
 export type CadDefaults = {
   printToleranceMm: number;
+  glassSeatDiametralClearanceMm?: number;
+  internalStepChamferMm?: number;
   radialClearanceMm: number;
   wallThicknessMm: number;
   retainingLipMm: number;
@@ -103,6 +105,9 @@ export type ElementCupParams = {
     depthMm: number;
   }>;
   seatClearanceMm: number;
+  glassSeatDiametralClearanceMm?: number;
+  internalStepChamferMm?: number;
+  internalStepChamferEnabled?: boolean;
   wallThicknessMm: number;
   retainingLipMm: number;
   rearLipMm: number;

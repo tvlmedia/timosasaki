@@ -3,6 +3,8 @@ import { defaultFocusTravelSetup } from "@/lib/focusTravel";
 
 export const defaultCadDefaults: CadDefaults = {
   printToleranceMm: 0.18,
+  glassSeatDiametralClearanceMm: 0.5,
+  internalStepChamferMm: 0.3,
   radialClearanceMm: 0.15,
   wallThicknessMm: 2,
   retainingLipMm: 0.8,
